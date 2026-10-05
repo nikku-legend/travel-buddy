@@ -1,0 +1,30 @@
+# Normalise line endings in the repository, and on checkout.
+#
+# Without this, Git on Windows rewrites every LF to CRLF in the working
+# copy. That is invisible in normal use but produces whole-file diffs
+# the moment someone edits on Windows and commits from Linux, and it is
+# why `git add` warns on every single file.
+#
+# The repository therefore stores LF; the working copy uses LF too,
+# except for the Windows batch scripts that genuinely require CRLF.
+* text=auto eol=lf
+
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+# Binary assets must never be line-ending converted or diffed.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.webp binary
+*.woff binary
+*.woff2 binary
+*.ttf  binary
+*.eot  binary
+*.pdf  binary
+*.docx binary
+*.xlsx binary
+*.jar  binary
+*.zip  binary

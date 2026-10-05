@@ -1,0 +1,2 @@
+ALTER TABLE bookings
+    ADD COLUMN currency VARCHAR(3) NOT NULL DEFAULT 'INR';

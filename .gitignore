@@ -1,0 +1,59 @@
+# Travel Buddy
+
+# ---- Secrets -------------------------------------------------------
+# Uploaded partner KYC documents contain unencrypted personal data.
+uploads/
+backend/uploads/
+
+# Real .env files. The .env.example templates are committed on purpose:
+# they document the variable names without carrying the values.
+.env
+.env.*
+!.env.example
+
+# ---- Build output --------------------------------------------------
+# Maven
+target/
+!.mvn/wrapper/maven-wrapper.jar
+
+# Vite / npm
+dist/
+dist-ssr/
+*.local
+
+# node_modules is matched at any depth, not just under frontend/.
+# A stray root-level npm install is exactly what this catches: an
+# unused dependency once pulled 48 MB of tree into the first commit.
+node_modules/
+.npm/
+
+# ---- IDE / editor --------------------------------------------------
+.idea/
+.vscode/
+*.iml
+*.iws
+*.ipr
+.classpath
+.project
+.settings/
+*.sw?
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---- Logs ----------------------------------------------------------
+*.log
+logs/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ---- Local archives ------------------------------------------------
+# Redundant copy of the frontend tree. Nothing references it, and it
+# is 38 MB.
+*.zip
+
+# ---- OS / editor cruft ---------------------------------------------
+*~
+*.tmp
+*.bak
