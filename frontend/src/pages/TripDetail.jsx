@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
+import ReviewCenter from "../components/ReviewCenter";
 import TreasureMap from "../components/TreasureMap";
 import tripService from "../services/tripService";
 
@@ -545,6 +546,15 @@ function TripDetail() {
           className="lg:sticky lg:top-24 lg:self-start"
         />
       </div>
+
+      {/*
+       * The Review Center. (SRS 2.3 TP-12)
+
+       * Self-gating: it asks the backend what is reviewable and
+       * renders nothing until the server says the window is open, so
+       * this line needs no conditional of its own.
+       */}
+      <ReviewCenter tripId={tripId} />
     </div>
   );
 }

@@ -5,10 +5,12 @@ import {
   Loader2,
   MapPin,
   Plus,
+  Star,
 } from "lucide-react";
 import { Link } from "react-router-dom";
 
 import tripService from "../services/tripService";
+import reviewService from "../services/reviewService";
 import { useAuth } from "../context/useAuth";
 
 /*
@@ -34,6 +36,48 @@ const STATUS_TONE = {
 function reachedOf(trip) {
   const milestones = trip.milestones ?? [];
   return milestones.filter((m) => m.completed).length;
+}
+
+/*
+ * How many reviews this trip is waiting on, per trip. (TP-12)
+ *
+ * Fetched separately per trip rather than as part of the list, and
+ * only after the list itself has loaded. The endpoint is
+ * integer-only for exactly this reason: badging twenty trips must
+ * not mean fetching twenty full Review Centers.
+ *
+ * Missing entries simply have no badge. A badge is decoration, so a
+ * failed count is not worth surfacing as an error on the list.
+ */
+function usePendingReviews(trips) {
+  const [counts, setCounts] = useState({});
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function load(tripIds) {
+      const entries = await Promise.all(
+        tripIds.map(async (tripId) => {
+          const pending = await reviewService.getPendingCount(tripId);
+          return [tripId, pending];
+        })
+      );
+
+      if (!cancelled) {
+        setCounts(Object.fromEntries(entries));
+      }
+    }
+
+    if (trips.length > 0) {
+      load(trips.map((trip) => trip.tripId));
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [trips]);
+
+  return counts;
 }
 
 function Trips() {
@@ -69,6 +113,8 @@ function Trips() {
   useEffect(() => {
     load();
   }, [load]);
+
+  const pendingReviews = usePendingReviews(trips);
 
   if (loading) {
     return (
@@ -120,6 +166,7 @@ function Trips() {
         {trips.map((trip) => {
           const total = (trip.milestones ?? []).length;
           const reached = reachedOf(trip);
+          const pending = pendingReviews[trip.tripId] ?? 0;
 
           return (
             <li key={trip.tripId}>
@@ -159,6 +206,20 @@ function Trips() {
                   <p className="mt-3 text-xs text-white/40">
                     {reached} of {total} checkpoints
                     reached
+                  </p>
+                )}
+
+                {/*
+                 * Reviews still owed on this trip. (TP-12)
+                 *
+                 * The only cross-cutting thing a trip list should
+                 * push: a service has been used and the traveller is
+                 * the only one who can unlock the next step.
+                 */}
+                {pending > 0 && (
+                  <p className="mt-3 inline-flex items-center gap-1.5 rounded-full bg-purple-500/20 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-purple-200">
+                    <Star className="h-3 w-3" />
+                    {pending} review{pending > 1 ? "s" : ""} due
                   </p>
                 )}
               </Link>
