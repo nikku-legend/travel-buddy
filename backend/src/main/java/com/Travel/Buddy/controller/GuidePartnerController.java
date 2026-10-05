@@ -3,6 +3,7 @@ package com.Travel.Buddy.controller;
 import com.Travel.Buddy.dto.guide.GuideProfileRequest;
 import com.Travel.Buddy.dto.guide.GuideReservationResponse;
 import com.Travel.Buddy.dto.guide.GuideSummaryResponse;
+import com.Travel.Buddy.entity.GuideReservationStatus;
 import com.Travel.Buddy.entity.User;
 import com.Travel.Buddy.repository.UserRepository;
 import com.Travel.Buddy.service.guide.GuideService;
@@ -58,6 +59,32 @@ public class GuidePartnerController {
                 guideService.myReservations(user)
         );
     }
+
+    /**
+     * Reports how far a tour has got. (FR-16, FR-23, FR-25)
+     *
+     * <p>Guides had no way to close out a tour, which meant no guide
+     * booking could ever reach COMPLETED -- and with it no guide review
+     * card and no completed trip for any journey containing one. The
+     * endpoint is the mirror of the cab partner's ride status PATCH.
+     */
+    @PatchMapping("/reservations/{reservationId}/status")
+    public ResponseEntity<GuideReservationResponse> updateReservationStatus(
+            Authentication authentication,
+            @PathVariable Long reservationId,
+            @RequestParam GuideReservationStatus status
+    ) {
+        User user = userRepository
+                .findByEmail(authentication.getName())
+                .orElseThrow();
+
+        return ResponseEntity.ok(
+                guideService.updateReservationStatusForUser(
+                        user, reservationId, status
+                )
+        );
+    }
+
     @PostMapping("/profile")
     public ResponseEntity<GuideSummaryResponse> updateProfile(
             Authentication authentication,

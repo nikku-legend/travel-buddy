@@ -31,6 +31,18 @@ public class GuideReservation {
     @Column(name = "tour_date", nullable = false)
     private LocalDate tourDate;
 
+    /**
+     * How far this tour has got. Added in V54.
+     *
+     * <p>See {@link GuideReservationStatus} for why this mirrors
+     * {@link RideStatus}. Defaults to CONFIRMED so a row created by
+     * any path that has not set it is still a valid outstanding tour
+     * rather than a null that every reader has to guard.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "status", nullable = false)
+    private GuideReservationStatus status = GuideReservationStatus.CONFIRMED;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
 
@@ -65,6 +77,14 @@ public class GuideReservation {
 
     public LocalDate getTourDate() {
         return tourDate;
+    }
+
+    public GuideReservationStatus getStatus() {
+        return status;
+    }
+
+    public void setStatus(GuideReservationStatus status) {
+        this.status = status;
     }
 
     public void setTourDate(LocalDate tourDate) {

@@ -13,28 +13,64 @@ import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 @Service
 public class GuideService {
+
+    /**
+     * The only status moves a guide may report on a tour. (FR-16, FR-25)
+     *
+     * <p>The same rule {@code CabService} applies to rides, and for
+     * the same reason: without it a tour could be walked backwards,
+     * so a completed tour could be re-opened and marked complete
+     * again.
+     *
+     * <p>Terminal states are absent on purpose. Once a tour is
+     * finished or cancelled it is a historical record, and a guide
+     * editing it would put the booking ledger and the review window
+     * out of agreement with each other.
+     */
+    private static final Map<GuideReservationStatus, Set<GuideReservationStatus>>
+            ALLOWED_TRANSITIONS =
+            Map.of(
+                    GuideReservationStatus.CONFIRMED,
+                    Set.of(GuideReservationStatus.IN_PROGRESS,
+                            GuideReservationStatus.CANCELLED),
+                    GuideReservationStatus.IN_PROGRESS,
+                    Set.of(GuideReservationStatus.COMPLETED,
+                            GuideReservationStatus.CANCELLED)
+            );
 
     private final GuideRepository guideRepository;
     private final GuideAvailabilityRepository guideAvailabilityRepository;
     private final GuideReservationRepository guideReservationRepository;
     private final StateRepository stateRepository;
     private final ReviewSummaryRepository reviewSummaryRepository;
+    private final BookingRepository bookingRepository;
+    private final TripSelectionRepository selectionRepository;
+    private final com.Travel.Buddy.service.trip.TripMilestoneService
+            milestoneService;
 
     public GuideService(
             GuideRepository guideRepository,
             GuideAvailabilityRepository guideAvailabilityRepository,
             GuideReservationRepository guideReservationRepository,
             StateRepository stateRepository,
-            ReviewSummaryRepository reviewSummaryRepository
+            ReviewSummaryRepository reviewSummaryRepository,
+            BookingRepository bookingRepository,
+            TripSelectionRepository selectionRepository,
+            com.Travel.Buddy.service.trip.TripMilestoneService milestoneService
     ) {
         this.guideRepository = guideRepository;
         this.guideAvailabilityRepository = guideAvailabilityRepository;
         this.guideReservationRepository = guideReservationRepository;
         this.stateRepository = stateRepository;
         this.reviewSummaryRepository = reviewSummaryRepository;
+        this.bookingRepository = bookingRepository;
+        this.selectionRepository = selectionRepository;
+        this.milestoneService = milestoneService;
     }
 
     @Transactional(readOnly = true)
@@ -95,6 +131,140 @@ public class GuideService {
                         ).reversed())
                 .map(GuideReservationResponse::of)
                 .toList();
+    }
+
+    @Transactional
+    public GuideReservationResponse updateReservationStatusForUser(
+            User partner,
+            Long reservationId,
+            GuideReservationStatus newStatus
+    ) {
+        Guide guide = guideRepository.findByUser_UserId(partner.getUserId())
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Guide profile does not exist for this account"
+                ));
+
+        return updateReservationStatus(
+                guide.getGuideId(), reservationId, newStatus
+        );
+    }
+
+    /**
+     * Reports how far a tour has got, and settles the booking when the
+     * guide says it was given.
+     *
+     * <p>This is the only thing in the system that can move a guide
+     * booking to COMPLETED. Without it the Review Center could never
+     * offer a guide card, because
+     * {@code TripReviewService} gates guide eligibility on a completed
+     * booking, and any trip containing a guide could never be marked
+     * complete, because
+     * {@code TripMilestoneService.completeTripIfFinished} requires
+     * every booked selection to be settled.
+     *
+     * <p>Mirrors {@code RoomStayService.checkOut} rather than inventing
+     * its own rules: a guide who performed the tour is the authority,
+     * the same way a host who checked a guest out is.
+     *
+     * @param guideId the guide asserting the change, used to prove the
+     *                reservation is actually theirs
+     */
+    @Transactional
+    public GuideReservationResponse updateReservationStatus(
+            Long guideId,
+            Long reservationId,
+            GuideReservationStatus newStatus
+    ) {
+        GuideReservation reservation = guideReservationRepository
+                .findByIdForUpdate(reservationId)
+                .orElseThrow(() -> new IllegalArgumentException(
+                        "Guide reservation not found with ID: " + reservationId
+                ));
+
+        Guide guide = reservation.getGuide();
+
+        if (guide == null
+                || guide.getGuideId() == null
+                || !guide.getGuideId().equals(guideId)) {
+
+            throw new IllegalArgumentException(
+                    "Guide reservation does not belong to this guide"
+            );
+        }
+
+        GuideReservationStatus current = reservation.getStatus();
+
+        if (current == newStatus) {
+            throw new IllegalArgumentException(
+                    "Tour is already " + newStatus
+            );
+        }
+
+        Set<GuideReservationStatus> permitted =
+                ALLOWED_TRANSITIONS.getOrDefault(current, Set.of());
+
+        if (!permitted.contains(newStatus)) {
+            throw new IllegalArgumentException(
+                    "A tour that is " + current + " cannot become " + newStatus
+            );
+        }
+
+        reservation.setStatus(newStatus);
+        guideReservationRepository.save(reservation);
+
+        if (newStatus == GuideReservationStatus.COMPLETED) {
+            completeBooking(reservation);
+        }
+
+        return GuideReservationResponse.of(reservation);
+    }
+
+    /**
+     * Settles the booking behind a completed tour.
+     *
+     * <p>Guarded on the booking still being live: a tour can be
+     * reported complete after the traveller cancelled the booking,
+     * and overwriting CANCELLED with COMPLETED would claim the guide
+     * was paid for a journey nobody took. This is the mirror image of
+     * the cab rule in {@code CabService}, where a cancelled ride
+     * that becomes COMPLETED is exactly the outcome to prevent.
+     */
+    private void completeBooking(GuideReservation reservation) {
+        Booking booking = reservation.getBooking();
+
+        if (booking == null || booking.getBookingId() == null) {
+            return;
+        }
+
+        if (booking.getBookingStatus() == BookingStatus.CONFIRMED
+                || booking.getBookingStatus() == BookingStatus.CHECKED_IN) {
+
+            booking.setBookingStatus(BookingStatus.COMPLETED);
+            bookingRepository.save(booking);
+        }
+
+        advanceTripMap(booking);
+    }
+
+    /**
+     * Re-evaluates the trip's closing pin.
+     *
+     * <p>A tour has no milestone of its own to tick, so unlike
+     * {@code RoomStayService.advanceTripMap} this completes no
+     * checkpoint. What matters is that TRIP_COMPLETED is derived from
+     * the booking states, and one of them has just changed, so the map
+     * is stale until this re-reads it.
+     */
+    private void advanceTripMap(Booking booking) {
+        selectionRepository
+                .findByBooking_BookingId(booking.getBookingId())
+                .ifPresent(selection -> {
+                    Trip trip = selection.getTrip();
+
+                    if (trip != null) {
+                        milestoneService.completeTripIfFinished(trip);
+                    }
+                });
     }
 
     @Transactional

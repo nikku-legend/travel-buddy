@@ -2,6 +2,7 @@ package com.Travel.Buddy.dto.guide;
 
 import com.Travel.Buddy.entity.BookingStatus;
 import com.Travel.Buddy.entity.GuideReservation;
+import com.Travel.Buddy.entity.GuideReservationStatus;
 import com.Travel.Buddy.entity.PaymentStatus;
 
 import java.math.BigDecimal;
@@ -34,6 +35,13 @@ public record GuideReservationResponse(
 
         LocalDate tourDate,
 
+        /**
+         * How far the guide has reported this tour getting, added in
+         * V54. Shown beside the tour date so the partner can tell an
+         * outstanding tour from one they have already closed out.
+         */
+        GuideReservationStatus status,
+
         /*
          * What the traveller paid for this tour, and what the guide
          * is owed before commission. Commission itself is FR-34
@@ -63,6 +71,7 @@ public record GuideReservationResponse(
                 booking == null ? null : booking.getBookingStatus(),
                 booking == null ? null : booking.getPaymentStatus(),
                 reservation.getTourDate(),
+                reservation.getStatus(),
                 booking == null ? null : booking.getTotalAmount(),
                 booking == null ? null : booking.getCurrency(),
                 booking == null ? null : booking.getGuestName(),

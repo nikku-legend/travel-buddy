@@ -64,6 +64,40 @@ export default function GuidePartnerDashboard() {
   const [reservations, setReservations] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [reporting, setReporting] = useState(null);
+  const [reportError, setReportError] = useState("");
+
+  const reportStatus = useCallback(
+    async (reservationId, status) => {
+      setReporting(reservationId);
+      setReportError("");
+
+      try {
+        const updated = await guidePartnerService.updateReservationStatus(
+          reservationId,
+          status
+        );
+
+        /*
+         * Patch the row in place rather than reloading the whole
+         * dashboard. A full reload would also clear the error banner
+         * region and re-run both profile and reservation queries for
+         * what is a single field changing on one row.
+         */
+        setReservations((rows) =>
+          rows.map((r) => (r.reservationId === reservationId ? { ...r, ...updated } : r))
+        );
+      } catch (err) {
+        setReportError(
+          err?.response?.data?.message ||
+            "Unable to update this tour. Please try again."
+        );
+      } finally {
+        setReporting(null);
+      }
+    },
+    []
+  );
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -257,15 +291,63 @@ export default function GuidePartnerDashboard() {
                       {r.bookingReference} ·{" "}
                       {r.bookingStatus?.replace(/_/g, " ")}
                     </p>
+                    <p className="mt-1 text-xs font-medium text-slate-600">
+                      Tour: {guidePartnerService.statusLabel(r.status)}
+                    </p>
+
+                    {reportError && reporting === r.reservationId ? (
+                      <p className="mt-1 text-xs text-rose-600">
+                        {reportError}
+                      </p>
+                    ) : null}
                   </div>
 
-                  <div className="text-right">
-                    <p className="text-sm font-semibold text-slate-900">
-                      {money(r.amount, r.currency)}
-                    </p>
-                    <p className="text-xs text-slate-500">
-                      {r.paymentStatus}
-                    </p>
+                  <div className="flex items-center gap-4">
+                    <div className="text-right">
+                      <p className="text-sm font-semibold text-slate-900">
+                        {money(r.amount, r.currency)}
+                      </p>
+                      <p className="text-xs text-slate-500">
+                        {r.paymentStatus}
+                      </p>
+                    </div>
+
+                    {/*
+                     * A terminal tour renders no buttons at all. The
+                     * backend refuses the moves anyway, so showing
+                     * them would only offer a guide a way to earn an
+                     * error.
+                     */}
+                    {guidePartnerService.nextStatuses(r.status).length > 0 ? (
+                      <div className="flex flex-wrap gap-2">
+                        {guidePartnerService
+                          .nextStatuses(r.status)
+                          .map((option) => (
+                            <button
+                              key={option.value}
+                              type="button"
+                              disabled={reporting === r.reservationId}
+                              onClick={() =>
+                                reportStatus(
+                                  r.reservationId,
+                                  option.value
+                                )
+                              }
+                              className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                                option.value === "COMPLETED"
+                                  ? "bg-teal-600 text-white hover:bg-teal-700"
+                                  : option.value === "CANCELLED"
+                                    ? "border border-rose-200 text-rose-600 hover:bg-rose-50"
+                                    : "border border-slate-300 text-slate-700 hover:bg-slate-50"
+                              }`}
+                            >
+                              {reporting === r.reservationId
+                                ? "Saving..."
+                                : option.label}
+                            </button>
+                          ))}
+                      </div>
+                    ) : null}
                   </div>
                 </li>
               ))}
