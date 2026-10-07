@@ -93,9 +93,8 @@ public class BookingCancellation {
 
 
     /**
-     * Current refund lifecycle state.
-     *
-     * Razorpay refund processing will be connected later.
+     * Current refund lifecycle state. Approval is not disbursement;
+     * only a provider-confirmed refund may be marked COMPLETED.
      */
     @Enumerated(EnumType.STRING)
     @Column(
@@ -128,10 +127,8 @@ public class BookingCancellation {
 
 
     /**
-     * Payment gateway refund reference.
-     *
-     * This will be populated during the final Razorpay
-     * integration stage.
+     * Payment gateway refund reference, populated when the
+     * disbursement provider accepts the refund.
      */
     @Column(
             name = "refund_reference",

@@ -13,6 +13,7 @@ import com.Travel.Buddy.repository.KycDocumentRepository;
 import com.Travel.Buddy.repository.KycDocumentTypeRepository;
 import com.Travel.Buddy.repository.PartnerApplicationRepository;
 import com.Travel.Buddy.repository.UserRepository;
+import com.Travel.Buddy.service.admin.AdminAuditService;
 import com.Travel.Buddy.service.notification.NotificationEvents;
 
 import org.springframework.stereotype.Service;
@@ -59,6 +60,8 @@ public class PartnerApplicationService {
 
     private final NotificationEvents notificationEvents;
 
+    private final AdminAuditService auditService;
+
     public PartnerApplicationService(
             PartnerApplicationRepository applicationRepository,
             KycDocumentRepository documentRepository,
@@ -66,7 +69,8 @@ public class PartnerApplicationService {
             UserRepository userRepository,
             RoleService roleService,
             KycStorageService storageService,
-            NotificationEvents notificationEvents
+            NotificationEvents notificationEvents,
+            AdminAuditService auditService
     ) {
         this.applicationRepository = applicationRepository;
         this.documentRepository = documentRepository;
@@ -75,6 +79,7 @@ public class PartnerApplicationService {
         this.roleService = roleService;
         this.storageService = storageService;
         this.notificationEvents = notificationEvents;
+        this.auditService = auditService;
     }
 
     /**
@@ -440,6 +445,17 @@ public class PartnerApplicationService {
             );
         }
 
+        auditService.record(
+                adminId,
+                "KYC_DOCUMENT_DECIDED",
+                "KycDocument",
+                documentId,
+                request.status()
+                        + (reason == null || reason.isBlank()
+                                ? ""
+                                : " - " + reason)
+        );
+
         return toDocumentResponse(
                 document,
                 document.getApplication().getPartnerType()
@@ -546,6 +562,19 @@ public class PartnerApplicationService {
                 applicationId,
                 Boolean.TRUE.equals(request.approved()),
                 reason
+        );
+
+        auditService.record(
+                adminId,
+                Boolean.TRUE.equals(request.approved())
+                        ? "PARTNER_APPLICATION_APPROVED"
+                        : "PARTNER_APPLICATION_REJECTED",
+                "PartnerApplication",
+                applicationId,
+                application.getPartnerType()
+                        + (reason == null || reason.isBlank()
+                                ? ""
+                                : " - " + reason)
         );
 
         return toResponse(application, false);

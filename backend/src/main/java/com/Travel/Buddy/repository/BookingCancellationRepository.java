@@ -1,12 +1,14 @@
 package com.Travel.Buddy.repository;
 
 import com.Travel.Buddy.entity.BookingCancellation;
+import com.Travel.Buddy.entity.RefundStatus;
 import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
+import java.util.List;
 import java.util.Optional;
 
 public interface BookingCancellationRepository
@@ -46,4 +48,23 @@ public interface BookingCancellationRepository
     boolean existsByBooking_BookingId(
             Long bookingId
     );
+
+    /**
+     * ============================================================
+     * REFUND DESK  (FR-33)
+     * ============================================================
+     *
+     * Cancellations whose money is still owed. The desk works
+     * newest first so the oldest unpaid refund cannot sit at the
+     * bottom of the queue forever.
+     */
+    List<BookingCancellation> findByRefundStatusOrderByCreatedAtDesc(
+            RefundStatus refundStatus
+    );
+
+    List<BookingCancellation> findByRefundStatusInOrderByCreatedAtDesc(
+            List<RefundStatus> refundStatuses
+    );
+
+    long countByRefundStatus(RefundStatus refundStatus);
 }

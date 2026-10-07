@@ -3,6 +3,8 @@ package com.Travel.Buddy.service.trip;
 import com.Travel.Buddy.dto.trip.ConfirmTripCheckoutRequest;
 import com.Travel.Buddy.dto.trip.TripBillResponse;
 import com.Travel.Buddy.dto.trip.TripCheckoutPreviewResponse;
+import com.Travel.Buddy.dto.trip.TripPaymentOrderResponse;
+import com.Travel.Buddy.dto.trip.VerifyTripPaymentRequest;
 import com.Travel.Buddy.entity.Trip;
 import com.Travel.Buddy.entity.TripBillItem;
 import com.Travel.Buddy.entity.TripBillLineType;
@@ -17,6 +19,8 @@ import com.Travel.Buddy.repository.TripBillItemRepository;
 import com.Travel.Buddy.repository.TripCheckoutRepository;
 import com.Travel.Buddy.repository.TripRepository;
 import com.Travel.Buddy.repository.TripSelectionRepository;
+import com.Travel.Buddy.service.payment.PaymentService;
+import com.Travel.Buddy.service.admin.AdminAuditService;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -71,6 +75,8 @@ public class TripCheckoutService {
     private final TripBillService billService;
     private final TripMilestoneService milestoneService;
     private final TripBookingService bookingService;
+    private final PaymentService paymentService;
+    private final AdminAuditService auditService;
 
     public TripCheckoutService(
             TripRepository tripRepository,
@@ -80,7 +86,9 @@ public class TripCheckoutService {
             TripService tripService,
             TripBillService billService,
             TripMilestoneService milestoneService,
-            TripBookingService bookingService
+            TripBookingService bookingService,
+            PaymentService paymentService,
+            AdminAuditService auditService
     ) {
         this.tripRepository = tripRepository;
         this.checkoutRepository = checkoutRepository;
@@ -90,6 +98,8 @@ public class TripCheckoutService {
         this.billService = billService;
         this.milestoneService = milestoneService;
         this.bookingService = bookingService;
+        this.paymentService = paymentService;
+        this.auditService = auditService;
     }
 
     private static final Logger log =
@@ -236,6 +246,117 @@ public class TripCheckoutService {
         return checkoutRepository.save(checkout);
     }
 
+    @Transactional
+    public TripPaymentOrderResponse createPaymentOrder(
+            Long userId,
+            Long tripId,
+            Long checkoutId
+    ) {
+        tripService.requireOwned(userId, tripId);
+        TripCheckout checkout = checkoutRepository
+                .findByIdForUpdate(checkoutId)
+                .orElseThrow(() ->
+                        PartnerApplicationException.notFound(
+                                "Checkout not found"
+                        )
+                );
+        if (!checkout.getTrip().getTripId().equals(tripId)) {
+            throw PartnerApplicationException.notFound(
+                    "Checkout not found"
+            );
+        }
+        if (checkout.getStatus()
+                != TripCheckoutStatus.PAYMENT_PENDING) {
+            throw PartnerApplicationException.conflict(
+                    "Confirm the revalidated total before creating a payment order"
+            );
+        }
+
+        String orderId = checkout.getRazorpayOrderId();
+        if (orderId == null || orderId.isBlank()) {
+            orderId = paymentService.createOrder(
+                    checkout.getTotalAmount(),
+                    checkout.getCurrency(),
+                    checkout.getCheckoutReference()
+            );
+            checkout.awaitingPayment(orderId);
+            checkoutRepository.save(checkout);
+        }
+
+        long amount = checkout.getTotalAmount()
+                .movePointRight(2)
+                .longValueExact();
+        return new TripPaymentOrderResponse(
+                checkout.getCheckoutId(),
+                checkout.getCheckoutReference(),
+                orderId,
+                amount,
+                checkout.getCurrency(),
+                paymentService.getKeyId()
+        );
+    }
+
+    @Transactional
+    public TripCheckout verifyPayment(
+            Long userId,
+            Long tripId,
+            VerifyTripPaymentRequest request
+    ) {
+        tripService.requireOwned(userId, tripId);
+        TripCheckout checkout = checkoutRepository
+                .findByIdForUpdate(request.checkoutId())
+                .orElseThrow(() ->
+                        PartnerApplicationException.notFound(
+                                "Checkout not found"
+                        )
+                );
+        if (!checkout.getTrip().getTripId().equals(tripId)) {
+            throw PartnerApplicationException.notFound(
+                    "Checkout not found"
+            );
+        }
+        if (checkout.getRazorpayOrderId() == null
+                || !checkout.getRazorpayOrderId().equals(
+                request.razorpayOrderId()
+        )) {
+            throw PartnerApplicationException.badRequest(
+                    "Razorpay order does not match this checkout"
+            );
+        }
+        if (checkout.getStatus() == TripCheckoutStatus.PAID
+                || checkout.getStatus()
+                == TripCheckoutStatus.CONFIRMED
+                || checkout.getStatus()
+                == TripCheckoutStatus.RECOVERY_REQUIRED) {
+            if (request.razorpayPaymentId().equals(
+                    checkout.getRazorpayPaymentId()
+            )) {
+                return checkout;
+            }
+            throw PartnerApplicationException.conflict(
+                    "This checkout already has a verified payment"
+            );
+        }
+        if (checkout.getStatus()
+                != TripCheckoutStatus.PAYMENT_PENDING) {
+            throw PartnerApplicationException.conflict(
+                    "This checkout is not awaiting payment"
+            );
+        }
+
+        paymentService.verifyCapturedPayment(
+                request.razorpayOrderId(),
+                request.razorpayPaymentId(),
+                request.razorpaySignature(),
+                checkout.getTotalAmount(),
+                checkout.getCurrency()
+        );
+        return markPaid(
+                checkout.getCheckoutId(),
+                request.razorpayPaymentId()
+        );
+    }
+
     /* ============================================================
      * PAYMENT
      * ============================================================ */
@@ -341,8 +462,18 @@ public class TripCheckoutService {
 
         if (checkout.getStatus() == TripCheckoutStatus.PAID
                 || checkout.getStatus()
-                == TripCheckoutStatus.CONFIRMED) {
-            return checkout;
+                == TripCheckoutStatus.CONFIRMED
+                || checkout.getStatus()
+                == TripCheckoutStatus.RECOVERY_REQUIRED) {
+            if (razorpayPaymentId == null
+                    || razorpayPaymentId.equals(
+                    checkout.getRazorpayPaymentId()
+            )) {
+                return checkout;
+            }
+            throw PartnerApplicationException.conflict(
+                    "This checkout already has a verified payment"
+            );
         }
 
         checkout.markPaid(razorpayPaymentId);
@@ -455,6 +586,85 @@ public class TripCheckoutService {
         return checkout;
     }
 
+    /**
+     * Retries failed reservations for an already captured trip payment.
+     * It never initiates or repeats a payment; unresolved inventory keeps
+     * the checkout in recovery with the latest failure reason.
+     */
+    @Transactional
+    public TripCheckout reconcileRecovery(
+            Long adminUserId,
+            Long checkoutId
+    ) {
+        TripCheckout checkout = checkoutRepository
+                .findByIdForUpdate(checkoutId)
+                .orElseThrow(() ->
+                        PartnerApplicationException.notFound(
+                                "Checkout not found"
+                        )
+                );
+        if (checkout.getStatus()
+                != TripCheckoutStatus.RECOVERY_REQUIRED) {
+            throw PartnerApplicationException.conflict(
+                    "Only a paid checkout requiring recovery can be reconciled"
+            );
+        }
+        if (checkout.getRazorpayPaymentId() == null
+                || checkout.getRazorpayPaymentId().isBlank()) {
+            throw PartnerApplicationException.conflict(
+                    "This recovery has no recorded payment"
+            );
+        }
+
+        long retryableSelections = selectionRepository
+                .findByTrip_TripIdOrderBySelectionIdAsc(
+                        checkout.getTrip().getTripId()
+                )
+                .stream()
+                .filter(selection ->
+                        selection.getStatus()
+                                == TripSelectionStatus.UNAVAILABLE
+                                && selection.getBooking() == null
+                )
+                .count();
+        if (retryableSelections == 0) {
+            throw PartnerApplicationException.conflict(
+                    "This checkout has no failed reservations that can be retried"
+            );
+        }
+
+        List<String> failures =
+                bookingService.retryUnavailableBookings(
+                        checkout.getTrip()
+                );
+        if (failures.isEmpty()) {
+            checkout.confirm();
+            checkoutRepository.save(checkout);
+            advanceTrip(checkout);
+            auditService.record(
+                    adminUserId,
+                    "TRIP_CHECKOUT_RECOVERED",
+                    "TripCheckout",
+                    checkoutId,
+                    "Paid checkout reconciled without creating "
+                            + "another payment; payment "
+                            + checkout.getRazorpayPaymentId()
+            );
+        } else {
+            String recoveryReason = String.join("; ", failures);
+            checkout.requireRecovery(recoveryReason);
+            checkoutRepository.save(checkout);
+            auditService.record(
+                    adminUserId,
+                    "TRIP_CHECKOUT_RECOVERY_RETRY_FAILED",
+                    "TripCheckout",
+                    checkoutId,
+                    recoveryReason
+            );
+        }
+        return checkout;
+    }
+
     @Transactional
     public TripCheckout fail(
             Long checkoutId,
@@ -467,6 +677,13 @@ public class TripCheckoutService {
                                 "Checkout not found"
                         )
                 );
+
+        if (checkout.getStatus()
+                != TripCheckoutStatus.PAYMENT_PENDING) {
+            throw PartnerApplicationException.conflict(
+                    "Only a checkout awaiting payment can be failed"
+            );
+        }
 
         checkout.fail(reason);
 

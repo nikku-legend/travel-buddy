@@ -44,6 +44,29 @@ const tripService = {
     return response.data;
   },
 
+  async saveScope(tripId, zone, regionName, countryId) {
+    const response = await api.post(
+      `/trip-planner/trips/${tripId}/scope`,
+      { zone, regionName, countryId: Number(countryId) }
+    );
+    return response.data;
+  },
+
+  async saveDates(tripId, startDate, endDate) {
+    const response = await api.post(
+      `/trip-planner/trips/${tripId}/dates`,
+      { startDate, endDate }
+    );
+    return response.data;
+  },
+
+  async getCitySuggestions(tripId) {
+    const response = await api.get(
+      `/trip-planner/trips/${tripId}/city-suggestions`
+    );
+    return response.data;
+  },
+
   /* ============================================================
    * ROUTE  (TP-02, TP-03)
    *
@@ -55,6 +78,14 @@ const tripService = {
     const response = await api.put(
       `/trip-planner/trips/${tripId}/route`,
       { stops }
+    );
+    return response.data;
+  },
+
+  async addPlaces(tripId, places) {
+    const response = await api.post(
+      `/trip-planner/trips/${tripId}/places`,
+      { places }
     );
     return response.data;
   },
@@ -78,6 +109,13 @@ const tripService = {
   async suggestRoute(tripId) {
     const response = await api.get(
       `/trip-planner/trips/${tripId}/route-suggestion`
+    );
+    return response.data;
+  },
+
+  async getDayAllocation(tripId) {
+    const response = await api.get(
+      `/trip-planner/trips/${tripId}/day-allocation`
     );
     return response.data;
   },
@@ -171,18 +209,25 @@ const tripService = {
     return response.data;
   },
 
-  /**
-   * Simulates the gateway. (SRS 2.2 TP-10)
-   *
-   * <p>The payment reference is generated server-side, so the client
-   * sends only whether the payment cleared. Sending a reference from
-   * the browser would let a caller name its own payment, which is
-   * indistinguishable from a real gateway in the records.
-   */
-  async payCheckout(tripId, checkoutId, paymentSuccessful) {
+  async payMockCheckout(tripId, checkoutId, paymentSuccessful) {
     const response = await api.post(
       `/trip-planner/trips/${tripId}/checkout/pay`,
       { checkoutId, paymentSuccessful }
+    );
+    return response.data;
+  },
+
+  async createTripPaymentOrder(tripId, checkoutId) {
+    const response = await api.post(
+      `/trip-planner/trips/${tripId}/checkout/${checkoutId}/payment/order`
+    );
+    return response.data;
+  },
+
+  async verifyTripPayment(tripId, payment) {
+    const response = await api.post(
+      `/trip-planner/trips/${tripId}/checkout/payment/verify`,
+      payment
     );
     return response.data;
   },
@@ -232,6 +277,13 @@ const tripService = {
   async getWarnings(tripId) {
     const response = await api.get(
       `/trip-planner/trips/${tripId}/warnings`
+    );
+    return response.data;
+  },
+
+  async getTripHealth(tripId) {
+    const response = await api.get(
+      `/trip-planner/trips/${tripId}/health`
     );
     return response.data;
   },

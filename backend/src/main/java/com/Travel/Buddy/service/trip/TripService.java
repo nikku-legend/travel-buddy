@@ -767,6 +767,16 @@ public class TripService {
                             )
                     );
 
+            if (place.getState() == null
+                    || tripCity.getCity().getState() == null
+                    || !place.getState().getStateId().equals(
+                    tripCity.getCity().getState().getStateId()
+            )) {
+                throw PartnerApplicationException.badRequest(
+                        "A place must belong to the state of its trip city"
+                );
+            }
+
             /*
              * Adding the same attraction twice would double its
              * entry fee in the bill, so it is treated as a no-op
@@ -1073,6 +1083,17 @@ public class TripService {
             case CAB -> cabRepository
                     .findById(targetId)
                     .map(com.Travel.Buddy.entity.Cab::getVehicleName)
+                    .orElse(null);
+
+            /*
+             * The cart resolves the place when the selection is
+             * created; this covers rows written before that
+             * link existed so the bill can still name them.
+             */
+            case ACTIVITY -> placeRepository
+                    .findById(targetId)
+                    .map(com.Travel.Buddy.entity
+                            .TouristPlace::getName)
                     .orElse(null);
 
             default -> null;

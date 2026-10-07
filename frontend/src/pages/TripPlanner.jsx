@@ -16,6 +16,7 @@ import { useNavigate } from "react-router-dom";
 import GuideStep from "../components/GuideStep";
 import TreasureMap from "../components/TreasureMap";
 import tripService from "../services/tripService";
+import destinationService from "../services/destinationService";
 import { useAuth } from "../context/useAuth";
 
 /*
@@ -31,7 +32,15 @@ import { useAuth } from "../context/useAuth";
  * rather than discovering them at the end.
  */
 
-const STEPS = ["Trip", "Route", "Stay", "Guide & Ride"];
+const STEPS = ["Trip details", "Cities", "Places", "Stay", "Guide & Ride"];
+const ZONES = [
+  ["NORTH", "North"],
+  ["SOUTH", "South"],
+  ["EAST", "East"],
+  ["WEST", "West"],
+  ["CENTRAL", "Central"],
+  ["NORTH_EAST", "North East"],
+];
 
 const SELECTION_ICON = {
   HOTEL: BedDouble,
@@ -41,13 +50,44 @@ const SELECTION_ICON = {
 };
 
 function today() {
-  return new Date().toISOString().slice(0, 10);
+  const date = new Date();
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 function addDays(iso, days) {
-  const date = new Date(`${iso}T00:00:00`);
-  date.setDate(date.getDate() + days);
+  const date = new Date(`${iso}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
   return date.toISOString().slice(0, 10);
+}
+
+function nightsBetween(startDate, endDate) {
+  return Math.round(
+    (Date.parse(`${endDate}T00:00:00Z`) -
+      Date.parse(`${startDate}T00:00:00Z`)) /
+      86400000
+  );
+}
+
+function distributeStopsAcrossTrip(cities, startDate, endDate) {
+  if (cities.length === 0) return [];
+  const nights = nightsBetween(startDate, endDate);
+  const baseNights = Math.floor(nights / cities.length);
+  const extraNights = nights % cities.length;
+  let arrivalDate = startDate;
+
+  return cities.map((city, index) => {
+    const stayNights = baseNights + (index < extraNights ? 1 : 0);
+    const stop = {
+      ...city,
+      arrivalDate,
+      departureDate: addDays(arrivalDate, stayNights),
+    };
+    arrivalDate = stop.departureDate;
+    return stop;
+  });
 }
 
 function TripPlanner() {
@@ -66,12 +106,23 @@ function TripPlanner() {
   const [startDate, setStartDate] = useState(addDays(today(), 30));
   const [endDate, setEndDate] = useState(addDays(today(), 36));
   const [cityCount, setCityCount] = useState(1);
+  const [travelerCount, setTravelerCount] = useState(2);
+  const [zone, setZone] = useState("");
+  const [countryChoices, setCountryChoices] = useState([]);
+  const [countryId, setCountryId] = useState("");
+  const [regionChoices, setRegionChoices] = useState([]);
+  const [regionName, setRegionName] = useState("");
+  const [travelStyle, setTravelStyle] = useState("BUDGET");
+  const [geographyBusy, setGeographyBusy] = useState(false);
 
   /* ---------------------------------------------------------
      STEP 2: the route
      --------------------------------------------------------- */
   const [cityChoices, setCityChoices] = useState([]);
   const [stops, setStops] = useState([]);
+  const [popularPlaces, setPopularPlaces] = useState([]);
+  const [selectedPlaces, setSelectedPlaces] = useState({});
+  const [placesBusy, setPlacesBusy] = useState(false);
 
   /* ---------------------------------------------------------
      STEP 3: a room
@@ -89,6 +140,7 @@ function TripPlanner() {
      --------------------------------------------------------- */
   const [guides, setGuides] = useState([]);
   const [cabs, setCabs] = useState([]);
+  const [guidePlaces, setGuidePlaces] = useState([]);
   const [extrasBusy, setExtrasBusy] = useState(false);
 
   useEffect(() => {
@@ -97,28 +149,108 @@ function TripPlanner() {
     }
   }, [authLoading, user, navigate]);
 
-  /*
-   * Cities come from home discovery, not from the planner's
-   * route-suggestion endpoint. That endpoint advises on the
-   * order of stops the traveller ALREADY has (TP-03), so with
-   * no route set it has nothing to say and returns no options.
-   *
-   * A failure here is not fatal. The traveller can still finish
-   * the trip, and saying so beats blocking the page on a
-   * convenience.
-   */
-  const loadCities = useCallback(async () => {
-    try {
-      const data = await tripService.getCities();
-      setCityChoices(Array.isArray(data) ? data : []);
-    } catch {
-      setCityChoices([]);
-    }
+  useEffect(() => {
+    let active = true;
+    destinationService.getCountries()
+      .then((countries) => {
+        if (!active) return;
+        const available = Array.isArray(countries) ? countries : [];
+        setCountryChoices(available);
+        const defaultCountry = available.find(
+          (country) => country.isoCode === "IN"
+        ) ?? available[0];
+        if (defaultCountry) {
+          setCountryId(String(defaultCountry.countryId));
+        } else {
+          setError("No supported countries are available for trip planning.");
+        }
+      })
+      .catch((err) => {
+        if (active) {
+          setError(
+            err?.response?.data?.message ||
+              "Unable to load travel regions right now."
+          );
+        }
+      });
+    return () => {
+      active = false;
+    };
   }, []);
 
+  useEffect(() => {
+    let active = true;
+    setRegionName("");
+    setRegionChoices([]);
+    if (!countryId || !zone) {
+      setGeographyBusy(false);
+      return undefined;
+    }
+    setGeographyBusy(true);
+    destinationService.getStates(Number(countryId), zone)
+      .then((regions) => {
+        if (active) {
+          setRegionChoices(Array.isArray(regions) ? regions : []);
+        }
+      })
+      .catch((err) => {
+        if (active) {
+          setError(
+            err?.response?.data?.message ||
+              "Unable to load regions for this zone."
+          );
+        }
+      })
+      .finally(() => {
+        if (active) setGeographyBusy(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [countryId, zone]);
+
+  const loadCities = useCallback(async (tripId) => {
+    const data = await tripService.getCitySuggestions(tripId);
+    setCityChoices(Array.isArray(data) ? data : []);
+  }, []);
+
+  const loadPopularPlaces = useCallback(async () => {
+    const cityStops = trip?.cities ?? [];
+    const stateIds = [...new Set(
+      cityStops.map((city) => city.stateId).filter(Boolean)
+    )];
+    if (!stateIds.length) {
+      setPopularPlaces([]);
+      return;
+    }
+    setPlacesBusy(true);
+    try {
+      const results = await Promise.all(
+        stateIds.map((stateId) => destinationService.getDestinations([stateId]))
+      );
+      const unique = new Map();
+      results.flat().forEach((place) => {
+        if (place?.active !== false) unique.set(place.placeId, place);
+      });
+      setPopularPlaces([...unique.values()]);
+    } catch (err) {
+      setError(
+        err?.response?.data?.message ||
+          "Unable to load popular places for your selected cities."
+      );
+    } finally {
+      setPlacesBusy(false);
+    }
+  }, [trip]);
+
   const createTrip = async () => {
-    if (!title.trim()) {
-      setError("Give the trip a name.");
+    if (!countryId || !zone || !regionName) {
+      setError("Choose a country, zone and region to continue.");
+      return;
+    }
+
+    if (travelerCount < 1 || travelerCount > 30) {
+      setError("Choose between 1 and 30 travellers.");
       return;
     }
 
@@ -129,25 +261,53 @@ function TripPlanner() {
       return;
     }
 
+    if (cityCount > nightsBetween(startDate, endDate)) {
+      setError("Choose no more cities than available trip nights.");
+      return;
+    }
+
     setBusy(true);
     setError("");
 
     try {
-      const created = await tripService.createTrip({
-        title: title.trim(),
+      let saved = trip;
+      if (!saved) {
+        saved = await tripService.createTrip({
+          title: title.trim() || undefined,
+          startDate,
+          endDate,
+          plannedCityCount: cityCount,
+          currency: "INR",
+        });
+        setTrip(saved);
+      }
+      saved = await tripService.savePreferences(
+        saved.tripId,
+        {
+          travelerCount,
+          adultCount: null,
+          childCount: null,
+          travelStyle,
+        }
+      );
+      saved = await tripService.saveScope(
+        saved.tripId,
+        zone,
+        regionName,
+        countryId
+      );
+      saved = await tripService.saveDates(
+        saved.tripId,
         startDate,
-        endDate,
-        plannedCityCount: cityCount,
-        currency: "INR",
-      });
-
-      setTrip(created);
+        endDate
+      );
+      setTrip(saved);
+      await loadCities(saved.tripId);
       setStep(1);
-      await loadCities();
     } catch (err) {
       setError(
         err?.response?.data?.message ||
-          "Unable to create the trip."
+          "Unable to save trip details or load city suggestions."
       );
     } finally {
       setBusy(false);
@@ -163,26 +323,25 @@ function TripPlanner() {
       return;
     }
 
-    const last = stops[stops.length - 1];
-
-    setStops((current) => [
-      ...current,
-      {
-        cityId: city.cityId,
-        name: city.name,
-        arrivalDate: last
-          ? last.departureDate
-          : startDate,
-        departureDate: last
-          ? addDays(last.departureDate, 1)
-          : addDays(startDate, 1),
-      },
-    ]);
+    setStops((current) => distributeStopsAcrossTrip(
+      [
+        ...current,
+        {
+          cityId: city.cityId,
+          name: city.name,
+        },
+      ],
+      startDate,
+      endDate
+    ));
   };
 
   const removeStop = (index) => {
-    setStops((current) =>
-      current.filter((_, i) => i !== index)
+    setStops((current) => distributeStopsAcrossTrip(
+      current.filter((_, i) => i !== index),
+      startDate,
+      endDate
+    )
     );
   };
 
@@ -206,6 +365,29 @@ function TripPlanner() {
       setError(
         err?.response?.data?.message ||
           "Unable to save the route."
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const savePlaces = async (skip = false) => {
+    setBusy(true);
+    setError("");
+    try {
+      const placesToSave = skip
+        ? []
+        : Object.entries(selectedPlaces).map(([placeId, tripCityId]) => ({
+            placeId: Number(placeId),
+            tripCityId,
+          }));
+      const saved = await tripService.addPlaces(trip.tripId, placesToSave);
+      setTrip(saved);
+      setStep(3);
+    } catch (err) {
+      setError(
+        err?.response?.data?.message ||
+          "Unable to save the selected places."
       );
     } finally {
       setBusy(false);
@@ -250,7 +432,13 @@ function TripPlanner() {
   };
 
   useEffect(() => {
-    if (step === 2 && recommendations.length === 0) {
+    if (step === 2) {
+      loadPopularPlaces();
+    }
+  }, [step, loadPopularPlaces]);
+
+  useEffect(() => {
+    if (step === 3 && recommendations.length === 0) {
       findHotels();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -268,23 +456,26 @@ function TripPlanner() {
     if (!first?.stateId) {
       setGuides([]);
       setCabs([]);
+      setGuidePlaces([]);
       return;
     }
 
     setExtrasBusy(true);
 
     try {
-      const [g, c] = await Promise.all([
+      const [g, c, d] = await Promise.all([
         tripService.getGuidesForState(first.stateId),
         tripService.getCabsForState(first.stateId),
+        destinationService.getDestinations([first.stateId]),
       ]);
 
       setGuides(g);
       setCabs(c);
+      setGuidePlaces(Array.isArray(d) ? d : []);
     } catch (err) {
       setError(
         err?.response?.data?.message ||
-          "Unable to look for guides and transport right now."
+          "Unable to look for guides, transport and things to do right now."
       );
     } finally {
       setExtrasBusy(false);
@@ -292,7 +483,7 @@ function TripPlanner() {
   }, [trip]);
 
   useEffect(() => {
-    if (step === 3) {
+    if (step === 4) {
       loadExtras();
     }
   }, [step, loadExtras]);
@@ -312,8 +503,8 @@ function TripPlanner() {
           targetId,
           checkIn: dates.checkIn,
           checkOut: dates.checkOut,
-          guests: 2,
-          rooms: 1,
+          guests: trip?.travelerCount ?? 2,
+          rooms: trip?.roomsRequired ?? 1,
           currency: "INR",
         }
       );
@@ -360,8 +551,8 @@ function TripPlanner() {
           roomTypeId: recommendation.roomTypeId,
           checkIn: stop?.arrivalDate,
           checkOut: stop?.departureDate,
-          guests: 2,
-          rooms: 1,
+          guests: trip?.travelerCount ?? 2,
+          rooms: trip?.roomsRequired ?? 1,
           currency: recommendation.currency,
         }
       );
@@ -433,6 +624,11 @@ function TripPlanner() {
              ====================================================== */}
           {step === 0 && (
             <section className="rounded-2xl border border-white/10 bg-white/5 p-6">
+              <p className="text-sm text-white/60">
+                Tell us who is travelling and where you want to explore.
+                Your choices shape suggestions; nothing is booked yet.
+              </p>
+
               <label className="block text-sm font-medium text-white">
                 Trip name
                 <input
@@ -444,6 +640,77 @@ function TripPlanner() {
                   className="mt-2 w-full rounded-xl border border-white/15 bg-slate-950 px-4 py-2.5 text-white outline-none focus:border-amber-300"
                 />
               </label>
+
+              <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                <label className="block text-sm font-medium text-white">
+                  Travellers
+                  <input
+                    type="number"
+                    min={1}
+                    max={30}
+                    value={travelerCount}
+                    onChange={(event) =>
+                      setTravelerCount(Number(event.target.value))
+                    }
+                    className="mt-2 w-full rounded-xl border border-white/15 bg-slate-950 px-4 py-2.5 text-white outline-none focus:border-amber-300"
+                  />
+                </label>
+
+                <label className="block text-sm font-medium text-white">
+                  Country
+                  <select
+                    value={countryId}
+                    onChange={(event) => setCountryId(event.target.value)}
+                    disabled={countryChoices.length === 0}
+                    className="mt-2 w-full rounded-xl border border-white/15 bg-slate-950 px-4 py-2.5 text-white outline-none focus:border-amber-300"
+                  >
+                    <option value="">Choose country</option>
+                    {countryChoices.map((country) => (
+                      <option key={country.countryId} value={country.countryId}>
+                        {country.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+
+              <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                <label className="block text-sm font-medium text-white">
+                  Zone
+                  <select
+                    value={zone}
+                    onChange={(event) => setZone(event.target.value)}
+                    className="mt-2 w-full rounded-xl border border-white/15 bg-slate-950 px-4 py-2.5 text-white outline-none focus:border-amber-300"
+                  >
+                    <option value="">Choose a zone</option>
+                    {ZONES.map(([value, label]) => (
+                      <option key={value} value={value}>{label}</option>
+                    ))}
+                  </select>
+                </label>
+
+                <label className="block text-sm font-medium text-white">
+                  Region
+                  <select
+                    value={regionName}
+                    onChange={(event) => setRegionName(event.target.value)}
+                    disabled={!zone || geographyBusy}
+                    className="mt-2 w-full rounded-xl border border-white/15 bg-slate-950 px-4 py-2.5 text-white outline-none focus:border-amber-300 disabled:opacity-50"
+                  >
+                    <option value="">
+                      {geographyBusy ? "Loading regions..." : "Choose a region"}
+                    </option>
+                    {regionChoices.map((region) => (
+                      <option key={region.stateId} value={region.name}>
+                        {region.name}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="mt-1 block text-xs text-white/45">
+                    Regions follow the available state/city catalogue.
+                  </span>
+                </label>
+              </div>
 
               <div className="mt-4 grid gap-4 sm:grid-cols-2">
                 <label className="block text-sm font-medium text-white">
@@ -473,11 +740,11 @@ function TripPlanner() {
               </div>
 
               <label className="mt-4 block text-sm font-medium text-white">
-                How many cities?
+                Maximum cities in this trip
                 <input
                   type="number"
                   min={1}
-                  max={15}
+                  max={Math.min(15, Math.max(1, nightsBetween(startDate, endDate)))}
                   value={cityCount}
                   onChange={(e) =>
                     setCityCount(
@@ -485,6 +752,7 @@ function TripPlanner() {
                         1,
                         Math.min(
                           15,
+                          Math.max(1, nightsBetween(startDate, endDate)),
                           Number(e.target.value) || 1
                         )
                       )
@@ -494,10 +762,44 @@ function TripPlanner() {
                 />
               </label>
 
+              <fieldset className="mt-5">
+                <legend className="text-sm font-medium text-white">
+                  Travel style
+                </legend>
+                <div className="mt-2 grid gap-3 sm:grid-cols-2">
+                  {[
+                    ["BUDGET", "Budget travel", "Value-focused with quality and trust safeguards."],
+                    ["PREMIUM", "Premium travel", "Higher-rated stays and convenient options."],
+                  ].map(([value, label, description]) => (
+                    <label
+                      key={value}
+                      className={`cursor-pointer rounded-xl border p-4 ${
+                        travelStyle === value
+                          ? "border-amber-300 bg-amber-300/10"
+                          : "border-white/10 bg-slate-950/50"
+                      }`}
+                    >
+                      <input
+                        type="radio"
+                        name="travelStyle"
+                        value={value}
+                        checked={travelStyle === value}
+                        onChange={() => setTravelStyle(value)}
+                        className="sr-only"
+                      />
+                      <span className="block font-semibold text-white">{label}</span>
+                      <span className="mt-1 block text-xs text-white/55">{description}</span>
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
+
               <button
                 type="button"
                 onClick={createTrip}
-                disabled={busy}
+                disabled={
+                  busy || geographyBusy || !countryId || !regionName
+                }
                 className="mt-6 inline-flex items-center gap-2 rounded-xl bg-amber-400 px-5 py-2.5 text-sm font-semibold text-slate-900 hover:bg-amber-300 disabled:opacity-50"
               >
                 {busy ? (
@@ -505,7 +807,7 @@ function TripPlanner() {
                 ) : (
                   <ChevronRight className="h-4 w-4" />
                 )}
-                Next: choose cities
+                Next: review city suggestions
               </button>
             </section>
           )}
@@ -609,15 +911,116 @@ function TripPlanner() {
                 ) : (
                   <ChevronRight className="h-4 w-4" />
                 )}
-                Next: find a place to stay
+                Next: choose places
               </button>
+            </section>
+          )}
+
+          {step === 2 && (
+            <section className="rounded-2xl border border-white/10 bg-white/5 p-6">
+              <h2 className="text-sm font-bold uppercase tracking-wider text-white">
+                Choose places to visit
+              </h2>
+              <p className="mt-2 text-sm text-white/55">
+                Select as many as you like, assign each to a city, or skip this step.
+                These are itinerary ideas, not booked activities.
+              </p>
+              {placesBusy ? (
+                <p className="mt-5 flex items-center gap-2 text-sm text-white/60">
+                  <Loader2 className="h-4 w-4 animate-spin" /> Finding places in your cities...
+                </p>
+              ) : popularPlaces.length === 0 ? (
+                <p className="mt-5 text-sm text-white/50">
+                  No attractions are listed for these cities yet. You can continue without places.
+                </p>
+              ) : (
+                <ul className="mt-5 grid gap-3 sm:grid-cols-2">
+                  {popularPlaces.map((place) => {
+                    const matchingCities = trip.cities.filter(
+                      (city) => city.stateId === place.stateId
+                    );
+                    const selectedTripCityId = selectedPlaces[place.placeId] ??
+                      matchingCities[0]?.tripCityId;
+                    const selected = Boolean(selectedPlaces[place.placeId]);
+                    return (
+                      <li key={place.placeId} className="overflow-hidden rounded-2xl border border-white/10 bg-slate-950/40">
+                        {place.imageUrl && (
+                          <img src={place.imageUrl} alt="" className="h-36 w-full object-cover" />
+                        )}
+                        <label className="flex cursor-pointer items-start gap-3 p-4">
+                          <input
+                            type="checkbox"
+                            checked={selected}
+                            onChange={(event) => {
+                              setSelectedPlaces((current) => {
+                                const next = { ...current };
+                                if (event.target.checked) {
+                                  next[place.placeId] = selectedTripCityId;
+                                } else {
+                                  delete next[place.placeId];
+                                }
+                                return next;
+                              });
+                            }}
+                            className="mt-1 accent-amber-300"
+                          />
+                          <span className="min-w-0 flex-1">
+                            <span className="block font-semibold text-white">{place.name}</span>
+                            <span className="mt-1 block line-clamp-2 text-xs text-white/50">
+                              {place.description || "A place to explore on your journey."}
+                            </span>
+                          </span>
+                        </label>
+                        {selected && (
+                          <label className="flex items-center justify-between gap-3 border-t border-white/10 px-4 py-3 text-xs text-white/60">
+                            Add to city
+                            <select
+                              value={selectedTripCityId ?? ""}
+                              onChange={(event) => setSelectedPlaces((current) => ({
+                                ...current,
+                                [place.placeId]: Number(event.target.value),
+                              }))}
+                              className="rounded-lg border border-white/15 bg-slate-900 px-2 py-1.5 text-white"
+                            >
+                              {matchingCities.map((city) => (
+                                <option key={city.tripCityId} value={city.tripCityId}>
+                                  {city.cityName}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
+              <div className="mt-6 flex flex-wrap gap-3">
+                <button
+                  type="button"
+                  onClick={() => savePlaces()}
+                  disabled={busy || placesBusy}
+                  className="inline-flex items-center gap-2 rounded-xl bg-amber-400 px-5 py-2.5 text-sm font-semibold text-slate-900 disabled:opacity-50"
+                >
+                  {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                  Save places
+                </button>
+                <button
+                  type="button"
+                  onClick={() => savePlaces(true)}
+                  disabled={busy || placesBusy}
+                  className="rounded-xl border border-white/15 px-5 py-2.5 text-sm font-semibold text-white/75 hover:bg-white/5 disabled:opacity-50"
+                >
+                  Skip places
+                </button>
+              </div>
             </section>
           )}
 
           {/* ======================================================
               STEP 3
              ====================================================== */}
-          {step === 2 && (
+          {step === 3 && (
             <section className="rounded-2xl border border-white/10 bg-white/5 p-6">
               <h2 className="text-sm font-bold uppercase tracking-wider text-white">
                 Places to stay
@@ -774,11 +1177,12 @@ function TripPlanner() {
           {/* ======================================================
               STEP 4: A GUIDE AND A RIDE
              ====================================================== */}
-          {step === 3 && (
+          {step === 4 && (
             <GuideStep
               trip={trip}
               guides={guides}
               cabs={cabs}
+              places={guidePlaces}
               busy={busy || extrasBusy}
               onAdd={addExtra}
               onReview={() => navigate(`/trips/${trip.tripId}`)}

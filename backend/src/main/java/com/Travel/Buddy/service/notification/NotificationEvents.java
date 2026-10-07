@@ -291,11 +291,13 @@ public class NotificationEvents {
         }
 
         return switch (dispute.getResolution()) {
-            case FULL_REFUND -> "You were refunded "
-                    + amount + " in full."
+            case FULL_REFUND -> "A full refund of "
+                    + amount + " was approved; it has not yet been "
+                    + "confirmed as disbursed."
                     + reason(dispute.getResolutionNotes());
-            case PARTIAL_REFUND -> "You were refunded "
-                    + amount + "."
+            case PARTIAL_REFUND -> "A partial refund of "
+                    + amount + " was approved; it has not yet been "
+                    + "confirmed as disbursed."
                     + reason(dispute.getResolutionNotes());
             default -> "The dispute was closed.";
         };

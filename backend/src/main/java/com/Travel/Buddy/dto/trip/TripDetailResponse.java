@@ -51,6 +51,8 @@ public record TripDetailResponse(
 
         String regionName,
 
+        Integer countryId,
+
         com.Travel.Buddy.entity.TravelStyle travelStyle,
 
         BigDecimal estimatedTotal,
@@ -96,6 +98,7 @@ public record TripDetailResponse(
                 t.roomsRequired(),
                 t.getZone(),
                 t.getRegionName(),
+                t.getCountryId(),
                 t.getTravelStyle(),
                 t.getEstimatedTotal(),
                 t.getCurrency(),

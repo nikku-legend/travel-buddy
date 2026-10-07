@@ -57,136 +57,92 @@ public class PaymentService {
     public String createOrder(
             Booking booking
     ) {
-
-        ensureRazorpayEnabled();
-
-        validateCredentials();
-
-
         if (booking == null) {
-
             throw new PaymentVerificationException(
-                    "Booking is required"
+                        "Booking is required"
             );
         }
+        return createOrder(
+                booking.getTotalAmount(),
+                booking.getCurrency(),
+                booking.getBookingReference()
+        );
+    }
 
-
-        if (booking.getTotalAmount() == null) {
-
+    public String createOrder(
+            BigDecimal amount,
+            String currency,
+            String receipt
+    ) {
+        ensureRazorpayEnabled();
+        validateCredentials();
+        if (amount == null) {
             throw new PaymentVerificationException(
-                    "Booking amount is missing"
+                        "Payment amount is missing"
             );
         }
-
-
-        if (booking.getTotalAmount()
-                .compareTo(BigDecimal.ZERO) <= 0) {
-
+        if (amount.compareTo(BigDecimal.ZERO) <= 0) {
             throw new PaymentVerificationException(
-                    "Booking amount must be greater than zero"
+                        "Payment amount must be greater than zero"
             );
         }
-
-
-        /*
-         * Razorpay accepts the amount in the smallest
-         * currency unit.
-         *
-         * Example:
-         *
-         * ₹1500.00
-         *
-         * becomes
-         *
-         * 150000 paise
-         */
-
-        long amountInSubunits =
-                booking.getTotalAmount()
+        if (currency == null || !currency.matches("[A-Z]{3}")) {
+            throw new PaymentVerificationException(
+                        "A valid three-letter currency code is required"
+            );
+        }
+        if (receipt == null || receipt.isBlank()
+                || receipt.length() > 40) {
+            throw new PaymentVerificationException(
+                        "A valid payment receipt is required"
+            );
+        }
+        try {
+            long amountInSubunits = amount
                         .movePointRight(2)
                         .longValueExact();
-
-
-        try {
-
             RazorpayClient razorpayClient =
-                    new RazorpayClient(
-                            razorpayKeyId,
-                            razorpayKeySecret
-                    );
-
-
+                        new RazorpayClient(
+                                razorpayKeyId,
+                                razorpayKeySecret
+                        );
             JSONObject orderRequest =
-                    new JSONObject();
-
-
+                        new JSONObject();
             orderRequest.put(
-                    "amount",
-                    amountInSubunits
+                        "amount",
+                        amountInSubunits
             );
-
-
+            orderRequest.put("currency", currency);
             orderRequest.put(
-                    "currency",
-                    booking.getCurrency()
+                        "receipt",
+                        receipt
             );
-
-
-            /*
-             * Razorpay receipt must be unique enough
-             * to identify our booking.
-             */
-
             orderRequest.put(
-                    "receipt",
-                    booking.getBookingReference()
+                        "payment_capture",
+                        1
             );
-
-
-            /*
-             * Automatically capture the payment
-             * after successful authorization.
-             */
-
-            orderRequest.put(
-                    "payment_capture",
-                    1
-            );
-
-
             com.razorpay.Order razorpayOrder =
-                    razorpayClient.orders.create(
-                            orderRequest
-                    );
-
-
+                        razorpayClient.orders.create(
+                                orderRequest
+                        );
             String orderId =
-                    razorpayOrder.get("id");
-
-
+                        razorpayOrder.get("id");
             if (orderId == null
-                    || orderId.isBlank()) {
-
+                        || orderId.isBlank()) {
                 throw new PaymentVerificationException(
                         "Razorpay did not return an order ID"
                 );
             }
-
-
             return orderId;
-
         } catch (RazorpayException exception) {
-
             throw new PaymentVerificationException(
-                    "Unable to create Razorpay payment order",
-                    exception
+                        "Unable to create Razorpay payment order",
+                        exception
             );
-
         } catch (ArithmeticException exception) {
-
             throw new PaymentVerificationException(
-                    "Booking amount is invalid for Razorpay",
-                    exception
+                        "Payment amount is invalid for Razorpay",
+                        exception
             );
         }
     }
@@ -226,7 +182,6 @@ public class PaymentService {
                     "Razorpay order ID is required"
             );
         }
-
 
         if (razorpayPaymentId == null
                 || razorpayPaymentId.isBlank()) {
@@ -293,6 +248,64 @@ public class PaymentService {
 
             throw new PaymentVerificationException(
                     "Unable to verify Razorpay payment signature",
+                    exception
+            );
+        }
+    }
+
+    public void verifyCapturedPayment(
+            String orderId,
+            String paymentId,
+            String signature,
+            BigDecimal expectedAmount,
+            String expectedCurrency
+    ) {
+        verifySignature(orderId, paymentId, signature);
+        if (expectedAmount == null || expectedCurrency == null) {
+            throw new PaymentVerificationException(
+                    "Expected payment amount and currency are required"
+            );
+        }
+
+        try {
+            RazorpayClient client = new RazorpayClient(
+                    razorpayKeyId, razorpayKeySecret
+            );
+            com.razorpay.Payment payment =
+                    client.payments.fetch(paymentId);
+            if (!orderId.equals(payment.get("order_id"))) {
+                throw new PaymentVerificationException(
+                        "Payment does not belong to this order"
+                );
+            }
+            if (!"captured".equalsIgnoreCase(
+                    String.valueOf(payment.get("status"))
+            )) {
+                throw new PaymentVerificationException(
+                        "Razorpay payment has not been captured"
+                );
+            }
+
+            long expectedMinorUnits = expectedAmount
+                    .movePointRight(2)
+                    .longValueExact();
+            long actualMinorUnits = Long.parseLong(
+                    String.valueOf(payment.get("amount"))
+            );
+            if (actualMinorUnits != expectedMinorUnits
+                    || !expectedCurrency.equalsIgnoreCase(
+                    String.valueOf(payment.get("currency"))
+            )) {
+                throw new PaymentVerificationException(
+                        "Razorpay payment amount or currency does not match the checkout"
+                );
+            }
+        } catch (PaymentVerificationException exception) {
+            throw exception;
+        } catch (RazorpayException | ArithmeticException
+                 | NumberFormatException exception) {
+            throw new PaymentVerificationException(
+                    "Unable to verify captured Razorpay payment",
                     exception
             );
         }

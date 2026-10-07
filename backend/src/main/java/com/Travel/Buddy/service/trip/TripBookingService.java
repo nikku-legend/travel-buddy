@@ -10,8 +10,10 @@ import com.Travel.Buddy.entity.Guide;
 import com.Travel.Buddy.entity.GuideReservation;
 import com.Travel.Buddy.entity.PaymentStatus;
 import com.Travel.Buddy.entity.RideStatus;
+import com.Travel.Buddy.entity.TouristPlace;
 import com.Travel.Buddy.entity.Trip;
 import com.Travel.Buddy.entity.TripSelection;
+import com.Travel.Buddy.entity.TripSelectionStatus;
 import com.Travel.Buddy.entity.TripSelectionType;
 import com.Travel.Buddy.entity.User;
 import com.Travel.Buddy.repository.BookingRepository;
@@ -19,6 +21,7 @@ import com.Travel.Buddy.repository.CabRepository;
 import com.Travel.Buddy.repository.CabRideRepository;
 import com.Travel.Buddy.repository.GuideRepository;
 import com.Travel.Buddy.repository.GuideReservationRepository;
+import com.Travel.Buddy.repository.TouristPlaceRepository;
 import com.Travel.Buddy.repository.TripSelectionRepository;
 import com.Travel.Buddy.repository.UserRepository;
 import com.Travel.Buddy.service.booking.BookingService;
@@ -90,6 +93,7 @@ public class TripBookingService {
     private final GuideReservationRepository guideReservationRepository;
     private final CabRepository cabRepository;
     private final CabRideRepository cabRideRepository;
+    private final TouristPlaceRepository placeRepository;
     private final TransactionTemplate requiresNew;
 
     public TripBookingService(
@@ -101,6 +105,7 @@ public class TripBookingService {
             GuideReservationRepository guideReservationRepository,
             CabRepository cabRepository,
             CabRideRepository cabRideRepository,
+            TouristPlaceRepository placeRepository,
             PlatformTransactionManager transactionManager
     ) {
         this.bookingService = bookingService;
@@ -111,6 +116,7 @@ public class TripBookingService {
         this.guideReservationRepository = guideReservationRepository;
         this.cabRepository = cabRepository;
         this.cabRideRepository = cabRideRepository;
+        this.placeRepository = placeRepository;
 
         this.requiresNew = new TransactionTemplate(
                 transactionManager
@@ -159,6 +165,51 @@ public class TripBookingService {
             }
         }
 
+        return failures;
+    }
+
+    /**
+     * Retries only selections that failed after the trip payment cleared.
+     * The reset and reservation are separate committed units so booking
+     * runs with a fresh view of the selection and its inventory.
+     */
+    public List<String> retryUnavailableBookings(Trip trip) {
+        List<Long> unavailableIds = selectionRepository
+                .findByTrip_TripIdOrderBySelectionIdAsc(
+                        trip.getTripId()
+                )
+                .stream()
+                .filter(selection ->
+                        selection.getStatus()
+                                == TripSelectionStatus.UNAVAILABLE
+                                && selection.getBooking() == null
+                )
+                .map(TripSelection::getSelectionId)
+                .toList();
+
+        List<String> failures = new ArrayList<>();
+        Long travellerId = trip.getUser().getUserId();
+        for (Long selectionId : unavailableIds) {
+            requiresNew.executeWithoutResult(status ->
+                    selectionRepository.findById(selectionId)
+                            .filter(selection ->
+                                    selection.getStatus()
+                                            == TripSelectionStatus.UNAVAILABLE
+                                            && selection.getBooking() == null
+                            )
+                            .ifPresent(selection -> {
+                                selection.markSelected();
+                                selectionRepository.save(selection);
+                            })
+            );
+
+            String failure = bookOne(
+                    selectionId, travellerId, trip
+            );
+            if (failure != null) {
+                failures.add(failure);
+            }
+        }
         return failures;
     }
 
@@ -242,9 +293,9 @@ public class TripBookingService {
             case HOTEL -> bookHotel(selection, traveller, trip);
             case GUIDE -> bookGuide(selection, traveller, trip);
             case CAB -> bookCab(selection, traveller, trip);
-            case ACTIVITY -> describe(selectionId)
-                    + " is an activity, which cannot be reserved "
-                    + "yet";
+            case ACTIVITY -> bookActivity(
+                    selection, traveller, trip
+            );
         };
     }
 
@@ -439,6 +490,66 @@ public class TripBookingService {
 
         bookingRepository.save(booking);
         cabRideRepository.save(ride);
+
+        link(selection, booking, trip);
+
+        return null;
+    }
+    /**
+     * Books an attraction visit as a paid entitlement.
+     *
+     * <p>An attraction has no inventory to hold the way a room,
+     * a guide or a cab does: there is no operator to assign and
+     * no counter that needs to know this traveller is coming.
+     * What was bought is the ticket, and the booking row is the
+     * proof of it -- typed ACTIVITY so settlement (FR-34) and
+     * the bookings page know what they are pricing or labelling.
+     *
+     * <p>Two things still matter before selling that ticket:
+     * the place must still exist, and it must still be open.
+     * Both are read from the place itself, because the targetId
+     * alone proves only that something once existed.
+     */
+    private String bookActivity(
+            TripSelection selection,
+            User traveller,
+            Trip trip
+    ) {
+        Long selectionId = selection.getSelectionId();
+
+        if (selection.getCheckIn() == null) {
+            return describe(selectionId)
+                    + " has no visit date, so the activity could "
+                    + "not be booked";
+        }
+
+        TouristPlace place = placeRepository
+                .findById(selection.getTargetId())
+                .orElseThrow(() -> new IllegalStateException(
+                        "this activity is no longer listed"
+                ));
+
+        if (!Boolean.TRUE.equals(place.getActive())) {
+            return describe(selectionId)
+                    + " refers to a place that is no longer open "
+                    + "to visitors";
+        }
+
+        Booking booking = newBooking(
+                traveller, selection, BookingType.ACTIVITY
+        );
+
+        bookingRepository.save(booking);
+
+        /*
+         * Fill the denormalised handle when the cart did not, so
+         * the bill and the voucher can name the place without a
+         * second lookup. An existing link is the cart's own
+         * resolution and is never overwritten.
+         */
+        if (selection.getPlace() == null) {
+            selection.setPlace(place);
+        }
 
         link(selection, booking, trip);
 

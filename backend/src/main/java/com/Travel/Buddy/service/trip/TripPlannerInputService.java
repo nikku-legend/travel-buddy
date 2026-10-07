@@ -11,6 +11,8 @@ import com.Travel.Buddy.entity.TravelStyle;
 import com.Travel.Buddy.entity.Trip;
 import com.Travel.Buddy.exception.PartnerApplicationException;
 import com.Travel.Buddy.repository.CityRepository;
+import com.Travel.Buddy.repository.CountryRepository;
+import com.Travel.Buddy.repository.StateRepository;
 import com.Travel.Buddy.repository.TouristPlaceRepository;
 import com.Travel.Buddy.repository.TripRepository;
 
@@ -60,17 +62,23 @@ public class TripPlannerInputService {
     private final TripRepository tripRepository;
     private final CityRepository cityRepository;
     private final TouristPlaceRepository placeRepository;
+    private final CountryRepository countryRepository;
+    private final StateRepository stateRepository;
     private final TripService tripService;
 
     public TripPlannerInputService(
             TripRepository tripRepository,
             CityRepository cityRepository,
             TouristPlaceRepository placeRepository,
+            CountryRepository countryRepository,
+            StateRepository stateRepository,
             TripService tripService
     ) {
         this.tripRepository = tripRepository;
         this.cityRepository = cityRepository;
         this.placeRepository = placeRepository;
+        this.countryRepository = countryRepository;
+        this.stateRepository = stateRepository;
         this.tripService = tripService;
     }
 
@@ -129,8 +137,31 @@ public class TripPlannerInputService {
 
         trip.setScope(
                 request.zone().trim().toUpperCase(Locale.ROOT),
-                request.regionName().trim()
+                request.regionName().trim(),
+                request.countryId()
         );
+
+        RegionZone zone = parseZone(trip.getZone());
+        if (request.countryId() != null) {
+            if (!countryRepository.existsById(request.countryId())) {
+                throw PartnerApplicationException.badRequest(
+                        "The selected country is not supported"
+                );
+            }
+            boolean regionExists = stateRepository
+                    .findByCountry_CountryIdAndRegionZoneOrderByNameAsc(
+                            request.countryId(), zone
+                    )
+                    .stream()
+                    .anyMatch(state -> state.getName().equalsIgnoreCase(
+                            request.regionName().trim()
+                    ));
+            if (!regionExists) {
+                throw PartnerApplicationException.badRequest(
+                        "The selected region does not belong to that country and zone"
+                );
+            }
+        }
 
         return tripService.detailFor(
                 tripRepository.save(trip)
@@ -230,8 +261,16 @@ public class TripPlannerInputService {
         List<City> candidates = new ArrayList<>(
                 cityRepository.findAll().stream()
                         .filter(c -> c.getState() != null)
-                        .filter(c -> zone == null
-                                || c.getState().getRegionZone() == zone)
+                        .filter(c -> c.getState().getRegionZone() == zone)
+                        .filter(c -> trip.getCountryId() == null
+                                || c.getState().getCountry()
+                                .getCountryId()
+                                .equals(trip.getCountryId()))
+                        .filter(c -> trip.getRegionName() == null
+                                || c.getState().getName()
+                                .equalsIgnoreCase(
+                                        trip.getRegionName()
+                                ))
                         .toList()
         );
 
@@ -246,10 +285,10 @@ public class TripPlannerInputService {
         }
 
         List<Scored> scored = new ArrayList<>();
+        List<TouristPlace> places = placeRepository.findAll();
 
         for (City city : candidates) {
-            long places = placeRepository
-                    .findAll().stream()
+            long placeCount = places.stream()
                     .filter(p -> p.getState() != null
                             && p.getState().getStateId()
                             .equals(city.getState().getStateId()))
@@ -257,9 +296,9 @@ public class TripPlannerInputService {
 
             scored.add(new Scored(
                     city,
-                    (int) Math.min(places, Integer.MAX_VALUE),
+                    (int) Math.min(placeCount, Integer.MAX_VALUE),
                     reasonFor(city, (int) Math.min(
-                            places, Integer.MAX_VALUE))
+                            placeCount, Integer.MAX_VALUE))
             ));
         }
 
@@ -321,14 +360,9 @@ public class TripPlannerInputService {
         try {
             return RegionZone.valueOf(zone.toUpperCase(Locale.ROOT));
         } catch (IllegalArgumentException e) {
-            /*
-             * A zone the platform does not recognise is treated as
-             * "no zone constraint" rather than an error: the
-             * traveller may be planning somewhere not yet
-             * classified, and refusing outright would be worse
-             * than showing too much.
-             */
-            return null;
+            throw PartnerApplicationException.badRequest(
+                    "Choose one of the supported travel zones"
+            );
         }
     }
 }

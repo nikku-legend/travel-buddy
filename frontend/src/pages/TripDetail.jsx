@@ -15,6 +15,7 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 
 import ReviewCenter from "../components/ReviewCenter";
 import TreasureMap from "../components/TreasureMap";
+import RazorpayPayment from "../components/payment/RazorpayPayment";
 import tripService from "../services/tripService";
 
 /*
@@ -44,11 +45,14 @@ const SELECTION_ICON = {
   PLACE: MapPin,
 };
 
+const mockPaymentsEnabled =
+  import.meta.env.VITE_MOCK_PAYMENTS === "true";
+
 function money(amount, currency) {
   if (amount === null || amount === undefined) {
     return null;
   }
-  return `${currency ?? "INR"} ${Number(amount).toFixed(0)}`;
+  return `${currency ?? "INR"} ${Number(amount).toFixed(2)}`;
 }
 
 function TripDetail() {
@@ -69,7 +73,15 @@ function TripDetail() {
   const [preview, setPreview] = useState(null);
   const [checkoutBusy, setCheckoutBusy] = useState(false);
   const [checkoutError, setCheckoutError] = useState("");
-  const [paid, setPaid] = useState(null);
+  const [checkoutHistory, setCheckoutHistory] = useState([]);
+  const [checkoutHistoryLoading, setCheckoutHistoryLoading] = useState(true);
+  const [checkoutHistoryError, setCheckoutHistoryError] = useState("");
+  const [dayAllocation, setDayAllocation] = useState(null);
+  const [allocationBusy, setAllocationBusy] = useState(false);
+  const [allocationError, setAllocationError] = useState("");
+  const [tripHealth, setTripHealth] = useState(null);
+  const [healthBusy, setHealthBusy] = useState(false);
+  const [healthError, setHealthError] = useState("");
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -100,10 +112,29 @@ function TripDetail() {
     load();
   }, [load]);
 
+  const loadCheckoutHistory = useCallback(async () => {
+    setCheckoutHistoryLoading(true);
+    setCheckoutHistoryError("");
+    try {
+      const history = await tripService.getCheckoutHistory(tripId);
+      setCheckoutHistory(Array.isArray(history) ? history : []);
+    } catch (err) {
+      setCheckoutHistoryError(
+        err?.response?.data?.message ||
+          "Unable to verify this trip's checkout status."
+      );
+    } finally {
+      setCheckoutHistoryLoading(false);
+    }
+  }, [tripId]);
+
+  useEffect(() => {
+    loadCheckoutHistory();
+  }, [loadCheckoutHistory]);
+
   const startCheckout = useCallback(async () => {
     setCheckoutBusy(true);
     setCheckoutError("");
-    setPaid(null);
 
     try {
       setPreview(await tripService.previewCheckout(tripId));
@@ -117,6 +148,36 @@ function TripDetail() {
     }
   }, [tripId]);
 
+  const loadDayAllocation = useCallback(async () => {
+    setAllocationBusy(true);
+    setAllocationError("");
+    try {
+      setDayAllocation(await tripService.getDayAllocation(tripId));
+    } catch (err) {
+      setAllocationError(
+        err?.response?.data?.message ||
+          "Unable to calculate a suggested stay allocation."
+      );
+    } finally {
+      setAllocationBusy(false);
+    }
+  }, [tripId]);
+
+  const loadTripHealth = useCallback(async () => {
+    setHealthBusy(true);
+    setHealthError("");
+    try {
+      setTripHealth(await tripService.getTripHealth(tripId));
+    } catch (err) {
+      setHealthError(
+        err?.response?.data?.message ||
+          "Unable to check itinerary feasibility."
+      );
+    } finally {
+      setHealthBusy(false);
+    }
+  }, [tripId]);
+
   /*
    * Agree to the revalidated total, then pay.
    *
@@ -125,8 +186,8 @@ function TripDetail() {
    * The accepted total is the number currently on screen, so a bill
    * that moved again is rejected by the backend rather than charged.
    */
-  const acceptAndPay = useCallback(
-    async (successful) => {
+  const acceptCheckout = useCallback(
+    async () => {
       if (!preview) {
         return;
       }
@@ -135,26 +196,20 @@ function TripDetail() {
       setCheckoutError("");
 
       try {
-        await tripService.confirmCheckout(
+        const checkout = await tripService.confirmCheckout(
           tripId,
           preview.checkoutId,
           preview.revalidatedTotal,
           preview.bill?.currency
         );
 
-        setPaid(
-          await tripService.payCheckout(
-            tripId,
-            preview.checkoutId,
-            successful
-          )
+        setCheckoutHistory((history) =>
+          [checkout, ...history.filter(
+            (item) => item.checkoutId !== checkout.checkoutId
+          )].sort((left, right) => right.checkoutId - left.checkoutId)
         );
-
-        // Paying is what confirms the trip and ticks the start
-        // checkpoint, so the page must refetch or it would show a
-        // stale status next to a paid bill.
-        await load();
       } catch (err) {
+        await loadCheckoutHistory();
         setCheckoutError(
           err?.response?.data?.message ||
             "Payment could not be completed."
@@ -163,7 +218,7 @@ function TripDetail() {
         setCheckoutBusy(false);
       }
     },
-    [preview, tripId, load]
+    [loadCheckoutHistory, preview, tripId]
   );
 
   if (loading) {
@@ -199,6 +254,20 @@ function TripDetail() {
     trip.estimatedTotal,
     trip.currency
   );
+  const latestCheckout = checkoutHistory[0] ?? null;
+  const pendingCheckout =
+    latestCheckout?.status === "PAYMENT_PENDING"
+      ? latestCheckout
+      : null;
+  const persistedPaymentOutcome =
+    latestCheckout &&
+    ["PAID", "CONFIRMED", "RECOVERY_REQUIRED"].includes(
+      latestCheckout.status
+    )
+      ? latestCheckout
+      : null;
+  const persistedPaymentFailure =
+    latestCheckout?.status === "FAILED" ? latestCheckout : null;
 
   /*
    * Checkout is only offered for a trip that still has something to
@@ -210,7 +279,40 @@ function TripDetail() {
     trip.status !== "CONFIRMED" &&
     trip.status !== "COMPLETED" &&
     trip.status !== "CLOSED" &&
-    !paid;
+    !checkoutHistoryLoading &&
+    !checkoutHistoryError &&
+    !pendingCheckout &&
+    !persistedPaymentOutcome;
+
+  async function runMockPayment(paymentSuccessful) {
+    if (!pendingCheckout) return;
+    setCheckoutBusy(true);
+    setCheckoutError("");
+    try {
+      const result = await tripService.payMockCheckout(
+        tripId,
+        pendingCheckout.checkoutId,
+        paymentSuccessful
+      );
+      setCheckoutHistory((history) =>
+        [result, ...history.filter(
+          (item) => item.checkoutId !== result.checkoutId
+        )].sort((left, right) => right.checkoutId - left.checkoutId)
+      );
+      if (result.status === "FAILED") {
+        setPreview(null);
+      } else {
+        await load();
+      }
+    } catch (err) {
+      setCheckoutError(
+        err?.response?.data?.message ||
+          "The mock payment could not be processed."
+      );
+    } finally {
+      setCheckoutBusy(false);
+    }
+  }
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-10">
@@ -311,6 +413,164 @@ function TripDetail() {
             )}
           </section>
 
+          <section className="rounded-2xl border border-white/10 bg-white/5 p-5">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-sm font-bold uppercase tracking-wider text-white">
+                  Itinerary health
+                </h2>
+                <p className="mt-1 text-xs text-white/50">
+                  Checks dates, route gaps, unavailable picks and budget. Advice only; your plan will not be changed.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={loadTripHealth}
+                disabled={healthBusy}
+                className="inline-flex items-center gap-2 rounded-xl border border-white/15 px-4 py-2 text-sm text-white hover:bg-white/10 disabled:opacity-50"
+              >
+                {healthBusy ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Sparkles className="h-4 w-4" />
+                )}
+                {tripHealth ? "Refresh checks" : "Check itinerary"}
+              </button>
+            </div>
+            {healthError && (
+              <p role="alert" className="mt-3 rounded-xl bg-red-500/10 p-3 text-sm text-red-300">
+                {healthError}
+              </p>
+            )}
+            {tripHealth && (
+              <div className="mt-4 space-y-3">
+                <p
+                  className={[
+                    "inline-flex rounded-full px-3 py-1 text-xs font-semibold uppercase tracking-wider",
+                    tripHealth.status === "NEEDS_ATTENTION"
+                      ? "bg-amber-400/10 text-amber-200"
+                      : "bg-emerald-500/10 text-emerald-200",
+                  ].join(" ")}
+                >
+                  {tripHealth.status === "NEEDS_ATTENTION"
+                    ? "Needs attention"
+                    : "On track"}
+                </p>
+                {tripHealth.issues?.length === 0 ? (
+                  <p className="text-sm text-emerald-200">
+                    No date, budget, or selected-service conflicts found.
+                  </p>
+                ) : (
+                  <ul className="space-y-2">
+                    {tripHealth.issues?.map((issue, index) => (
+                      <li
+                        key={`${issue.code}-${issue.tripCityId ?? ""}-${issue.selectionId ?? index}`}
+                        className={[
+                          "rounded-xl p-3 text-sm",
+                          issue.severity === "BLOCKER"
+                            ? "bg-red-500/10 text-red-200"
+                            : issue.severity === "WARNING"
+                              ? "bg-amber-400/10 text-amber-100"
+                              : "bg-white/5 text-white/70",
+                        ].join(" ")}
+                      >
+                        <span className="mr-2 text-[10px] font-bold uppercase tracking-wider opacity-70">
+                          {issue.severity}
+                        </span>
+                        {issue.message}
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {tripHealth.budget != null && (
+                  <p className="text-xs text-white/50">
+                    Current estimate: {money(tripHealth.estimatedTotal, tripHealth.currency)}
+                    {" · "}Budget: {money(
+                      tripHealth.budget,
+                      tripHealth.budgetCurrency || tripHealth.currency
+                    )}
+                  </p>
+                )}
+              </div>
+            )}
+          </section>
+
+          <section className="rounded-2xl border border-white/10 bg-white/5 p-5">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-sm font-bold uppercase tracking-wider text-white">
+                  Suggested city stays
+                </h2>
+                <p className="mt-1 text-xs text-white/50">
+                  Advisory only; your saved itinerary will not be changed.
+                </p>
+              </div>
+              {!dayAllocation && (
+                <button
+                  type="button"
+                  onClick={loadDayAllocation}
+                  disabled={allocationBusy || cities.length === 0}
+                  className="inline-flex items-center gap-2 rounded-xl border border-white/15 px-4 py-2 text-sm text-white hover:bg-white/10 disabled:opacity-50"
+                >
+                  {allocationBusy ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Sparkles className="h-4 w-4" />
+                  )}
+                  Suggest allocation
+                </button>
+              )}
+            </div>
+            {allocationError && (
+              <p className="mt-3 rounded-xl bg-red-500/10 p-3 text-sm text-red-300">
+                {allocationError}
+              </p>
+            )}
+            {dayAllocation && (
+              <div className="mt-4 space-y-3">
+                {dayAllocation.notes?.map((note) => (
+                  <p
+                    key={note}
+                    className="rounded-xl bg-amber-400/10 p-3 text-sm text-amber-200"
+                  >
+                    {note}
+                  </p>
+                ))}
+                {dayAllocation.cityAllocations?.map((allocation) => (
+                  <div
+                    key={allocation.tripCityId}
+                    className="flex flex-wrap items-start justify-between gap-3 rounded-xl bg-white/5 p-3"
+                  >
+                    <div>
+                      <p className="font-medium text-white">
+                        {allocation.cityName}
+                      </p>
+                      <p className="mt-1 text-xs text-white/50">
+                        {allocation.suggestedArrivalDate} to{" "}
+                        {allocation.suggestedDepartureDate}
+                      </p>
+                      <p className="mt-1 text-xs text-white/40">
+                        {allocation.rationale}
+                      </p>
+                    </div>
+                    <p className="text-sm font-semibold text-amber-200">
+                      {allocation.suggestedNights}{" "}
+                      {allocation.suggestedNights === 1 ? "night" : "nights"}
+                    </p>
+                  </div>
+                ))}
+                <button
+                  type="button"
+                  onClick={loadDayAllocation}
+                  disabled={allocationBusy}
+                  className="text-xs text-white/50 underline hover:text-white disabled:opacity-50"
+                >
+                  Recalculate suggestion
+                </button>
+              </div>
+            )}
+          </section>
+
           {/* ==========================================================
               CART
              ========================================================== */}
@@ -366,6 +626,20 @@ function TripDetail() {
             )}
           </section>
 
+          {checkoutHistoryError && (
+            <section className="rounded-2xl border border-amber-300/20 bg-amber-400/10 p-5 text-sm text-amber-100">
+              <p>{checkoutHistoryError} New payment is disabled until the status can be checked.</p>
+              <button
+                type="button"
+                onClick={loadCheckoutHistory}
+                disabled={checkoutHistoryLoading}
+                className="mt-3 underline disabled:opacity-50"
+              >
+                Retry status check
+              </button>
+            </section>
+          )}
+
           {/* ==========================================================
               CHECKOUT
              ========================================================== */}
@@ -375,7 +649,7 @@ function TripDetail() {
            * "Pay" button would make testing a decline impossible and
            * would hide the fact that the payment is simulated.
            */}
-          {canCheckout && (
+          {(canCheckout || pendingCheckout) && (
             <section className="rounded-2xl border border-white/10 bg-white/5 p-5">
               <h2 className="mb-4 text-sm font-bold uppercase tracking-wider text-white">
                 Checkout
@@ -388,7 +662,69 @@ function TripDetail() {
                 </p>
               )}
 
-              {!preview ? (
+              {persistedPaymentFailure && !pendingCheckout && (
+                <p className="mb-4 rounded-xl bg-amber-400/10 p-3 text-sm text-amber-200">
+                  The previous payment was not completed. No payment was captured; review the trip total to start a new checkout.
+                </p>
+              )}
+
+              {pendingCheckout ? (
+                <>
+                  <p className="mb-4 text-sm text-white/70">
+                    A payment session is already open for this trip. Continue with that session; do not start another checkout.
+                  </p>
+                  {mockPaymentsEnabled ? (
+                    <div className="space-y-3">
+                      <p className="rounded-xl border border-amber-300/20 bg-amber-400/10 p-3 text-xs text-amber-100">
+                        Development mock payment is enabled. It does not process real money.
+                      </p>
+                      <div className="flex flex-wrap gap-3">
+                        <button
+                          type="button"
+                          onClick={() => runMockPayment(false)}
+                          disabled={checkoutBusy}
+                          className="rounded-xl border border-white/15 px-4 py-2.5 text-sm text-white disabled:opacity-50"
+                        >
+                          Simulate decline
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => runMockPayment(true)}
+                          disabled={checkoutBusy}
+                          className="rounded-xl bg-amber-400 px-4 py-2.5 text-sm font-semibold text-slate-900 disabled:opacity-50"
+                        >
+                          {checkoutBusy ? "Processing..." : "Simulate successful payment"}
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <RazorpayPayment
+                      tripId={Number(tripId)}
+                      checkoutId={pendingCheckout.checkoutId}
+                      paymentAmountMinor={Math.round(
+                        Number(pendingCheckout.totalAmount) * 100
+                      )}
+                      booking={{ currency: pendingCheckout.currency }}
+                      onSuccess={(result) => {
+                        setCheckoutHistory((history) =>
+                          [result, ...history.filter(
+                            (item) => item.checkoutId !== result.checkoutId
+                          )].sort((left, right) => right.checkoutId - left.checkoutId)
+                        );
+                        load();
+                      }}
+                      onFailure={async (message) => {
+                        setCheckoutError(message);
+                        await loadCheckoutHistory();
+                      }}
+                      onCancel={async (message) => {
+                        setCheckoutError(message);
+                        await loadCheckoutHistory();
+                      }}
+                    />
+                  )}
+                </>
+              ) : !preview ? (
                 <button
                   type="button"
                   onClick={startCheckout}
@@ -455,12 +791,12 @@ function TripDetail() {
                     </span>
                   </div>
 
-                  {!preview.requiresConfirmation &&
-                    (preview.changedLines ?? []).length === 0 && (
+                  {(preview.changedLines ?? []).length === 0 &&
+                    (
                       <div className="flex flex-wrap gap-3">
                         <button
                           type="button"
-                          onClick={() => acceptAndPay(true)}
+                          onClick={acceptCheckout}
                           disabled={checkoutBusy}
                           className="inline-flex items-center gap-2 rounded-xl bg-amber-400 px-5 py-2.5 text-sm font-semibold text-slate-900 hover:bg-amber-300 disabled:opacity-50"
                         >
@@ -469,70 +805,48 @@ function TripDetail() {
                           ) : (
                             <Coins className="h-4 w-4" />
                           )}
-                          Pay now
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => acceptAndPay(false)}
-                          disabled={checkoutBusy}
-                          className="rounded-xl border border-white/20 px-4 py-2.5 text-sm text-white/70 hover:bg-white/5 disabled:opacity-50"
-                        >
-                          Simulate a decline
+                          {preview.requiresConfirmation
+                            ? "Accept updated total"
+                            : "Continue to secure payment"}
                         </button>
                       </div>
                     )}
-
-                  {/*
-                   * Recovery is not a decline. The money cleared and
-                   * something still has to be put right, so it is
-                   * worded differently and carries the reason the
-                   * server recorded -- a traveller owed a fix should
-                   * not be shown the same message as one whose card
-                   * was rejected.
-                   */}
-                  {paid?.status === "RECOVERY_REQUIRED" && (
-                    <div className="rounded-xl bg-red-500/10 p-3 text-sm text-red-300">
-                      <p className="font-semibold">
-                        Your payment went through, but part of
-                        your trip could not be reserved
-                      </p>
-                      {paid.recoveryReason && (
-                        <p className="mt-1 text-red-200/80">
-                          {paid.recoveryReason}
-                        </p>
-                      )}
-                      <p className="mt-2 text-red-200/60">
-                        Our team is resolving this. You have not
-                        been charged twice.
-                      </p>
-                    </div>
-                  )}
-
-                  {paid && paid.status !== "RECOVERY_REQUIRED" && (
-                    <p
-                      className={[
-                        "flex items-center gap-2 rounded-xl p-3 text-sm",
-                        paid.status === "PAID" ||
-                        paid.status === "CONFIRMED"
-                          ? "bg-emerald-500/10 text-emerald-300"
-                          : "bg-amber-500/10 text-amber-200",
-                      ].join(" ")}
-                    >
-                      {paid.status === "PAID" ||
-                      paid.status === "CONFIRMED" ? (
-                        <CheckCircle2 className="h-4 w-4 shrink-0" />
-                      ) : (
-                        <AlertTriangle className="h-4 w-4 shrink-0" />
-                      )}
-                      Payment {paid.status}.{" "}
-                      {paid.status === "PAID" ||
-                      paid.status === "CONFIRMED"
-                        ? "Your trip is confirmed."
-                        : "Nothing was charged."}
-                    </p>
-                  )}
                 </div>
+              )}
+            </section>
+          )}
+
+          {persistedPaymentOutcome && (
+            <section
+              className={[
+                "rounded-2xl border p-5 text-sm",
+                persistedPaymentOutcome.status === "RECOVERY_REQUIRED"
+                  ? "border-red-300/20 bg-red-500/10 text-red-200"
+                  : "border-emerald-300/20 bg-emerald-500/10 text-emerald-200",
+              ].join(" ")}
+            >
+              {persistedPaymentOutcome.status === "RECOVERY_REQUIRED" ? (
+                <>
+                  <p className="font-semibold">
+                    Payment received; reservation recovery is in progress.
+                  </p>
+                  {persistedPaymentOutcome.recoveryReason && (
+                    <p className="mt-2">{persistedPaymentOutcome.recoveryReason}</p>
+                  )}
+                  <p className="mt-2">
+                    Do not pay again. This checkout will remain visible here while our team resolves it.
+                  </p>
+                </>
+              ) : persistedPaymentOutcome.status === "PAID" ? (
+                <>
+                  <p className="font-semibold">Payment received; trip confirmation is being finalized.</p>
+                  <p className="mt-2">No new payment is needed while this checkout is being reconciled.</p>
+                </>
+              ) : (
+                <p className="flex items-center gap-2 font-semibold">
+                  <CheckCircle2 className="h-4 w-4 shrink-0" />
+                  Payment confirmed. Your trip is booked.
+                </p>
               )}
             </section>
           )}

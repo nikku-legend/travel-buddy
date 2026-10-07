@@ -37,6 +37,17 @@ public class User {
     @Column(name = "role", nullable = false, length = 30)
     private Role role;
 
+    /**
+     * Suspension state. (FR-31)
+     *
+     * <p>Column default ACTIVE, field default ACTIVE: the column
+     * is new, so every account that already exists must come out
+     * of the migration usable rather than instantly suspended.
+     */
+    @Enumerated(EnumType.STRING)
+    @Column(name = "status", nullable = false, length = 20)
+    private UserStatus status = UserStatus.ACTIVE;
+
     @Column(name = "created_at", nullable = false)
     private LocalDateTime createdAt;
 
@@ -101,6 +112,10 @@ public class User {
         if (role == null) {
             role = Role.ROLE_USER;
         }
+
+        if (status == null) {
+            status = UserStatus.ACTIVE;
+        }
     }
 
     @PreUpdate
@@ -154,6 +169,14 @@ public class User {
 
     public void setRole(Role role) {
         this.role = role;
+    }
+
+    public UserStatus getStatus() {
+        return status;
+    }
+
+    public void setStatus(UserStatus status) {
+        this.status = status;
     }
 
     public LocalDateTime getCreatedAt() {

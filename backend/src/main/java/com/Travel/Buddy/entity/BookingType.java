@@ -15,5 +15,16 @@ public enum BookingType {
 
     GUIDE,
 
-    CAB
+    CAB,
+
+    /**
+     * An attraction visit booked through the trip planner.
+     *
+     * <p>Activities have no partner and no inventory row to
+     * hold -- the ticket is the entitlement -- but the type
+     * still has to be recorded, because settlement and the
+     * bookings page both ask "of what" before they can price
+     * or label anything.
+     */
+    ACTIVITY
 }

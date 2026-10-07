@@ -58,6 +58,8 @@ class TripReviewServiceTest {
     @Autowired
     private RoomTypeRepository roomTypeRepository;
     @Autowired
+    private TouristPlaceRepository placeRepository;
+    @Autowired
     private BookingRepository bookingRepository;
     @Autowired
     private TripSelectionRepository selectionRepository;
@@ -81,6 +83,7 @@ class TripReviewServiceTest {
     private City city;
     private Property property;
     private RoomType roomType;
+    private TouristPlace place;
     private Long routedTrip;
     private Long routedCityId;
     private LocalDate start;
@@ -136,6 +139,21 @@ class TripReviewServiceTest {
         roomType.setTotalInventory(4);
         roomType.setActive(true);
         roomType = roomTypeRepository.save(roomType);
+
+        /*
+         * A real attraction. The activity selection used to
+         * point at the property's id, which the cart accepted
+         * because nothing resolved it -- now the cart loads the
+         * place, so the id has to be one.
+         */
+        place = new TouristPlace();
+        place.setState(sharedState);
+        place.setCity(city);
+        place.setName("Review Temple-" + rand());
+        place.setCurrency("INR");
+        place.setEntryFee(new BigDecimal("150.00"));
+        place.setActive(true);
+        place = placeRepository.save(place);
     }
     /* A COMPLETED STAY EARNS A CARD */
 
@@ -641,7 +659,7 @@ class TripReviewServiceTest {
 
     private TripSelection activity(Long tripId) {
         return add(tripId, TripSelectionType.ACTIVITY,
-                property.getPropertyId(), null);
+                place.getPlaceId(), null);
     }
 
     /** How many selections the trip had after the last add. */

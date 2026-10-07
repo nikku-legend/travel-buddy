@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 
 import bookingService from "../../services/bookingService";
+import tripService from "../../services/tripService";
 
 const RAZORPAY_SCRIPT_URL = "https://checkout.razorpay.com/v1/checkout.js";
 const VERIFY_TIMEOUT_MS = 20000;
@@ -80,6 +81,9 @@ function extractErrorMessage(err, fallback) {
 /* ---------- Component ---------- */
 export default function RazorpayPayment({
   bookingId,
+  tripId,
+  checkoutId,
+  paymentAmountMinor,
   booking,
   onSuccess,
   onFailure,
@@ -131,8 +135,8 @@ export default function RazorpayPayment({
   };
 
   const startPayment = async () => {
-    if (!bookingId) {
-      const msg = "Booking ID is missing.";
+    if (!bookingId && (!tripId || !checkoutId)) {
+      const msg = "Booking or trip checkout details are missing.";
       setError(msg);
       notifyFailure(msg);
       return;
@@ -154,10 +158,11 @@ export default function RazorpayPayment({
       }
 
       const idempotencyKey = uuid();
-
-      const order = await bookingService.createPaymentOrder(bookingId, {
-        idempotencyKey,
-      });
+      const order = tripId
+        ? await tripService.createTripPaymentOrder(tripId, checkoutId)
+        : await bookingService.createPaymentOrder(bookingId, {
+            idempotencyKey,
+          });
 
       if (!order?.orderId) throw new Error("Payment order was not created.");
       if (!order?.keyId) throw new Error("Razorpay key ID was not returned.");
@@ -176,7 +181,9 @@ export default function RazorpayPayment({
         amount: amountMinor,
         currency: order.currency || "INR",
         name: "Travel Buddy",
-        description: booking?.hotelName
+        description: tripId
+          ? `Central payment for trip checkout ${checkoutId}`
+          : booking?.hotelName
           ? `Hotel booking at ${booking.hotelName}`
           : "Travel Buddy Hotel Booking",
         order_id: order.orderId,
@@ -186,7 +193,9 @@ export default function RazorpayPayment({
           contact: booking?.guestPhone || booking?.userPhone || "",
         },
         notes: {
-          booking_id: String(bookingId),
+          booking_id: bookingId ? String(bookingId) : "",
+          trip_id: tripId ? String(tripId) : "",
+          checkout_id: checkoutId ? String(checkoutId) : "",
           booking_reference: order.bookingReference || "",
         },
         theme: { color: "#0f766e" },
@@ -220,11 +229,18 @@ export default function RazorpayPayment({
             }
 
             const verification = await withTimeout(
-              bookingService.verifyPayment(bookingId, {
-                razorpayOrderId: response.razorpay_order_id,
-                razorpayPaymentId: response.razorpay_payment_id,
-                razorpaySignature: response.razorpay_signature,
-              }),
+              tripId
+                ? tripService.verifyTripPayment(tripId, {
+                    checkoutId,
+                    razorpayOrderId: response.razorpay_order_id,
+                    razorpayPaymentId: response.razorpay_payment_id,
+                    razorpaySignature: response.razorpay_signature,
+                  })
+                : bookingService.verifyPayment(bookingId, {
+                    razorpayOrderId: response.razorpay_order_id,
+                    razorpayPaymentId: response.razorpay_payment_id,
+                    razorpaySignature: response.razorpay_signature,
+                  }),
               VERIFY_TIMEOUT_MS,
               "Payment verification timed out. We will confirm your booking shortly."
             );
@@ -281,7 +297,8 @@ export default function RazorpayPayment({
   };
 
   const amountMinor = Number(
-    booking?.totalAmountMinor ??
+    paymentAmountMinor ??
+      booking?.totalAmountMinor ??
       booking?.amountMinor ??
       booking?.totalAmountMinorUnits ??
       0
@@ -297,10 +314,14 @@ export default function RazorpayPayment({
               <ShieldCheck className="h-4 w-4" />
               Secure payment
             </div>
-            <h3 className="text-xl font-bold">Complete your booking</h3>
+            <h3 className="text-xl font-bold">
+              {tripId ? "Complete your trip checkout" : "Complete your booking"}
+            </h3>
             <p className="mt-2 max-w-xl text-sm leading-6 text-white/70">
-              Pay securely through Razorpay. Your booking is confirmed only
-              after server-side verification.
+              Pay securely through Razorpay.{" "}
+              {tripId
+                ? "Your trip is confirmed only after server-side verification."
+                : "Your booking is confirmed only after server-side verification."}
             </p>
           </div>
           <div className="hidden rounded-2xl border border-white/10 bg-white/10 p-3 sm:block">
@@ -316,7 +337,11 @@ export default function RazorpayPayment({
               <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">
                 Amount payable
               </p>
-              <p className="mt-1 text-sm text-slate-600">Booking #{bookingId}</p>
+              <p className="mt-1 text-sm text-slate-600">
+                {tripId
+                  ? `Trip checkout #${checkoutId}`
+                  : `Booking #${bookingId}`}
+              </p>
             </div>
             <p className="text-xl font-extrabold text-slate-950">
               {formatMoney(amountMinor, currency)}

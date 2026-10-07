@@ -59,6 +59,9 @@ class ReviewServiceTest {
     private ReviewRepository reviewRepository;
 
     @Autowired
+    private AdminAuditLogRepository auditLogRepository;
+
+    @Autowired
     private UserRepository userRepository;
 
     @Autowired
@@ -405,6 +408,65 @@ class ReviewServiceTest {
                         ReviewTargetType.HOTEL, propertyId
                 ).reviewCount()
         );
+    }
+
+    @Test
+    @DisplayName("Reported published reviews enter a moderator queue and decisions are audited")
+    void flaggedReviewsAreQueuedAndModerationIsAudited() {
+        bookingFor(guest, BookingStatus.COMPLETED);
+
+        ReviewResponse submitted = service.submit(
+                guest.getUserId(), review(2)
+        );
+        service.moderate(
+                admin.getUserId(),
+                submitted.reviewId(),
+                new ReviewDecisionRequest(true, null)
+        );
+
+        service.flag(admin.getUserId(), submitted.reviewId());
+        service.flag(partner.getUserId(), submitted.reviewId());
+        service.flag(stranger.getUserId(), submitted.reviewId());
+
+        assertEquals(
+                1,
+                service.flaggedQueue().size(),
+                "A review reported by multiple travellers must be visible to moderators"
+        );
+        assertEquals(
+                ReviewStatus.FLAGGED,
+                service.flaggedQueue().get(0).status()
+        );
+        assertTrue(
+                service.publicReviews(
+                        ReviewTargetType.HOTEL, propertyId
+                ).isEmpty(),
+                "Flagged content must be removed from public ratings pending review"
+        );
+
+        service.moderate(
+                admin.getUserId(),
+                submitted.reviewId(),
+                new ReviewDecisionRequest(
+                        false,
+                        "Reports indicate this review contains abusive language."
+                )
+        );
+
+        assertTrue(auditLogRepository
+                .findTop200ByOrderByCreatedAtDesc()
+                .stream()
+                .anyMatch(log ->
+                        "REVIEW_REJECTED".equals(log.getAction())
+                                && "Review".equals(log.getEntityType())
+                                && submitted.reviewId().equals(log.getEntityId())
+                                && log.getActor().getUserId().equals(
+                                        admin.getUserId()
+                                )
+                                && log.getDetail().contains(
+                                        "abusive language"
+                                )
+                ));
     }
 
     @Test

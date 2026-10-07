@@ -16,6 +16,7 @@ function GuideStep({
   trip,
   guides,
   cabs,
+  places,
   busy,
   onAdd,
   onReview,
@@ -24,7 +25,7 @@ function GuideStep({
     return (
       <section className="rounded-2xl border border-white/10 bg-white/5 p-6">
         <h2 className="text-sm font-bold uppercase tracking-wider text-white">
-          A guide and a ride
+          Guides, rides and things to do
         </h2>
         <p className="mt-4 text-sm text-amber-300">
           Choose a route first, so we know which city you need a
@@ -54,13 +55,13 @@ function GuideStep({
   return (
     <section className="rounded-2xl border border-white/10 bg-white/5 p-6">
       <h2 className="text-sm font-bold uppercase tracking-wider text-white">
-        A guide and a ride
+        Guides, rides and things to do
       </h2>
 
       <p className="mt-2 text-sm text-white/50">
-        Optional. Both are reserved the moment you pay, so a
-        guide who is already taken is refused before any money
-        moves.
+        Optional. Everything here is reserved the moment you
+        pay, so a guide who is already taken is refused before
+        any money moves.
       </p>
 
       <div className="mt-5">
@@ -144,6 +145,58 @@ function GuideStep({
                     type="button"
                     disabled={busy || added}
                     onClick={() => onAdd("CAB", cab.cabId, dates)}
+                    className="rounded-lg border border-amber-300/40 px-3 py-1.5 text-xs font-semibold text-amber-300 hover:bg-amber-300/10 disabled:opacity-50"
+                  >
+                    {added ? "Added" : "Add"}
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
+
+      <div className="mt-6">
+        <h3 className="text-xs font-semibold uppercase tracking-wider text-white/60">
+          Things to do in {stop.cityName}
+        </h3>
+
+        {(places ?? []).length === 0 ? (
+          <p className="mt-3 text-sm text-white/40">
+            No attractions are listed for this state yet.
+          </p>
+        ) : (
+          <ul className="mt-3 space-y-2">
+            {(places ?? []).map((place) => {
+              const added = alreadyPicked(
+                "ACTIVITY",
+                place.placeId
+              );
+
+              return (
+                <li
+                  key={place.placeId}
+                  className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/10 p-3"
+                >
+                  <div>
+                    <p className="text-sm font-semibold text-white">
+                      {place.name}
+                    </p>
+                    <p className="text-xs text-white/50">
+                      {place.entryFee != null
+                        ? `Entry ${place.entryFee} ${
+                            place.currency || "INR"
+                          } / person`
+                        : "Free entry"}
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    disabled={busy || added}
+                    onClick={() =>
+                      onAdd("ACTIVITY", place.placeId, dates)
+                    }
                     className="rounded-lg border border-amber-300/40 px-3 py-1.5 text-xs font-semibold text-amber-300 hover:bg-amber-300/10 disabled:opacity-50"
                   >
                     {added ? "Added" : "Add"}

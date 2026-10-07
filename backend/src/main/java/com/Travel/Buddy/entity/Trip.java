@@ -119,6 +119,9 @@ public class Trip {
     @Column(name = "region_name", length = 120)
     private String regionName;
 
+    @Column(name = "country_id")
+    private Integer countryId;
+
     /**
      * TP-05. A ranking preference, never a filter: budget still
      * applies the quality floor and premium still respects the
@@ -296,10 +299,12 @@ public class Trip {
 
     public void setScope(
             String zone,
-            String regionName
+            String regionName,
+            Integer countryId
     ) {
         this.zone = zone;
         this.regionName = regionName;
+        this.countryId = countryId;
     }
 
     public void setTravelStyle(TravelStyle travelStyle) {
@@ -399,6 +404,10 @@ public class Trip {
 
     public String getRegionName() {
         return regionName;
+    }
+
+    public Integer getCountryId() {
+        return countryId;
     }
 
     public TravelStyle getTravelStyle() {

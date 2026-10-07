@@ -49,6 +49,9 @@ class DisputeServiceTest {
     private DisputeTimelineRepository timelineRepository;
 
     @Autowired
+    private NotificationRepository notificationRepository;
+
+    @Autowired
     private BookingRepository bookingRepository;
 
     @Autowired
@@ -696,8 +699,8 @@ class DisputeServiceTest {
      * ============================================================ */
 
     @Test
-    @DisplayName("a full refund closes the dispute and refunds the booking")
-    void resolvesWithFullRefund() {
+    @DisplayName("a full refund ruling closes dispute without claiming disbursement")
+    void resolvesWithFullRefundRuling() {
         Booking booking = claimableBooking();
         DisputeResponse dispute = disputeService.raise(
                 traveller.getUserId(),
@@ -726,11 +729,29 @@ class DisputeServiceTest {
         assertNotNull(resolved.resolvedAt());
 
         assertEquals(
-                PaymentStatus.REFUNDED,
+                PaymentStatus.PAID,
                 bookingRepository.findById(booking.getBookingId())
                         .orElseThrow()
                         .getPaymentStatus()
         );
+
+        String notice = notificationRepository
+                .findAll()
+                .stream()
+                .filter(notification ->
+                        notification.getUser().getUserId()
+                                .equals(traveller.getUserId())
+                                && notification.getType()
+                                == NotificationType.DISPUTE_RESOLVED
+                )
+                .map(com.Travel.Buddy.entity.Notification::getBody)
+                .filter(body -> body != null
+                        && body.contains("approved"))
+                .findFirst()
+                .orElse("");
+        assertTrue(notice.contains("approved"));
+        assertTrue(notice.contains("not yet been confirmed as disbursed"));
+        assertFalse(notice.contains("You were refunded"));
     }
 
     @Test

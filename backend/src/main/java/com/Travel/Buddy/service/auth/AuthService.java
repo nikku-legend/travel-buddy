@@ -7,6 +7,7 @@ import com.Travel.Buddy.dto.auth.RegisterRequest;
 import com.Travel.Buddy.entity.RefreshToken;
 import com.Travel.Buddy.entity.Role;
 import com.Travel.Buddy.entity.User;
+import com.Travel.Buddy.entity.UserStatus;
 import com.Travel.Buddy.repository.UserRepository;
 import com.Travel.Buddy.security.JwtService;
 import com.Travel.Buddy.service.partner.RoleService;
@@ -152,6 +153,8 @@ public class AuthService {
                                 )
                         );
 
+        rejectIfSuspended(user);
+
         return createAuthResponse(user);
     }
 
@@ -167,6 +170,8 @@ public class AuthService {
 
         User user =
                 refreshToken.getUser();
+
+        rejectIfSuspended(user);
 
         /*
          * Refresh token rotation:
@@ -202,6 +207,22 @@ public class AuthService {
         refreshTokenService.revokeToken(
                 refreshToken
         );
+    }
+
+    /**
+     * A suspended account (FR-31) is a dead account: it may
+     * neither obtain a fresh session by logging in nor extend
+     * an old one by refreshing -- otherwise suspension would
+     * only ever be a speed bump for a token already in flight.
+     */
+    private void rejectIfSuspended(User user) {
+        if (user.getStatus() == UserStatus.SUSPENDED) {
+            throw new IllegalArgumentException(
+                    "This account has been suspended. "
+                            + "Contact support if you believe "
+                            + "this is a mistake."
+            );
+        }
     }
 
     private AuthResponse createAuthResponse(

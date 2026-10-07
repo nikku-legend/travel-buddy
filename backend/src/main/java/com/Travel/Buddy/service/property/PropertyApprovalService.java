@@ -12,6 +12,7 @@ import com.Travel.Buddy.repository.PropertyRepository;
 import com.Travel.Buddy.repository.RoomTypeRepository;
 import com.Travel.Buddy.repository.StateRepository;
 import com.Travel.Buddy.repository.UserRepository;
+import com.Travel.Buddy.service.admin.AdminAuditService;
 import com.Travel.Buddy.service.notification.NotificationEvents;
 
 import org.springframework.stereotype.Service;
@@ -62,18 +63,22 @@ public class PropertyApprovalService {
 
     private final NotificationEvents notificationEvents;
 
+    private final AdminAuditService auditService;
+
     public PropertyApprovalService(
             PropertyRepository propertyRepository,
             RoomTypeRepository roomTypeRepository,
             StateRepository stateRepository,
             UserRepository userRepository,
-            NotificationEvents notificationEvents
+            NotificationEvents notificationEvents,
+            AdminAuditService auditService
     ) {
         this.propertyRepository = propertyRepository;
         this.roomTypeRepository = roomTypeRepository;
         this.stateRepository = stateRepository;
         this.userRepository = userRepository;
         this.notificationEvents = notificationEvents;
+        this.auditService = auditService;
     }
 
     /* ============================================================
@@ -278,6 +283,19 @@ public class PropertyApprovalService {
             notificationEvents.propertyRejected(property, reason);
         }
 
+        auditService.record(
+                adminId,
+                Boolean.TRUE.equals(request.approved())
+                        ? "PROPERTY_APPROVED"
+                        : "PROPERTY_REJECTED",
+                "Property",
+                propertyId,
+                property.getName()
+                        + (reason == null || reason.isBlank()
+                                ? ""
+                                : " - " + reason)
+        );
+
         return response;
     }
 
@@ -323,6 +341,14 @@ public class PropertyApprovalService {
 
         notificationEvents.propertySuspended(
                 property, reason.trim()
+        );
+
+        auditService.record(
+                adminId,
+                "PROPERTY_SUSPENDED",
+                "Property",
+                propertyId,
+                property.getName() + " - " + reason.trim()
         );
 
         return response;

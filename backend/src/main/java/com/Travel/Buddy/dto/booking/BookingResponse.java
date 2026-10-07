@@ -1,6 +1,7 @@
 package com.Travel.Buddy.dto.booking;
 
 import com.Travel.Buddy.entity.BookingStatus;
+import com.Travel.Buddy.entity.BookingType;
 import com.Travel.Buddy.entity.PaymentStatus;
 
 import java.math.BigDecimal;
@@ -43,7 +44,15 @@ public record BookingResponse(
 
         LocalDateTime holdExpiresAt,
 
-        LocalDateTime createdAt
+        LocalDateTime createdAt,
+
+        /**
+         * What the booking was for. Stay-only fields are null
+         * for guide, ride and activity bookings, so the client
+         * labels the card from this rather than assuming every
+         * booking is a hotel reservation.
+         */
+        BookingType bookingType
 
 ) {
 }

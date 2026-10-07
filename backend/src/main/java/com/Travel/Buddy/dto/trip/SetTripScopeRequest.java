@@ -2,6 +2,7 @@ package com.Travel.Buddy.dto.trip;
 
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
+import jakarta.validation.constraints.Positive;
 
 /**
  * Steps 2 and 3 of the SRS 2.3 wizard: zone then region.
@@ -19,6 +20,13 @@ public record SetTripScopeRequest(
 
         @NotNull
         @Size(max = 120, message = "Region name is too long")
-        String regionName
+        String regionName,
+
+        @NotNull(message = "Choose a country")
+        @Positive(message = "Choose a valid country")
+        Integer countryId
 ) {
+    public SetTripScopeRequest(String zone, String regionName) {
+        this(zone, regionName, null);
+    }
 }

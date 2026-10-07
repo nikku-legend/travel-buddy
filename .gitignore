@@ -57,3 +57,5 @@ yarn-error.log*
 *~
 *.tmp
 *.bak
+# Microsoft Office lock files (the ~ + $ companion to a open doc)
+~$*

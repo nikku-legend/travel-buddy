@@ -387,13 +387,12 @@ public class DisputeService {
     }
 
     /**
-     * Rules on a dispute and applies the money.
+     * Rules on a dispute and records the financial ruling.
      *
-     * <p>Refund handling is deliberately coarse. This marks the
-     * booking as refunded and records the ruling; the actual
-     * disbursement and the partner's share of it belong to the
-     * settlement work in FR-35, which is where the ledger that
-     * pays partners out will live.
+     * <p>A refund ruling does not itself move money. Keep the
+     * booking payment as PAID until a payment-provider operation
+     * confirms disbursement; the ruling amount is an obligation,
+     * not a receipt.
      */
     @Transactional
     public DisputeResponse resolve(
@@ -488,11 +487,6 @@ public class DisputeService {
         }
 
         dispute.resolve(resolution, amount, notes);
-
-        if (resolution.involvesRefund()
-                && booking.getPaymentStatus() == PaymentStatus.PAID) {
-            booking.setPaymentStatus(PaymentStatus.REFUNDED);
-        }
 
         record(
                 dispute,

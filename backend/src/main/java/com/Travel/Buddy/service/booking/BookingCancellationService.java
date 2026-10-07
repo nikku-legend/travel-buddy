@@ -748,7 +748,8 @@ public class BookingCancellationService {
 
                 booking.getHoldExpiresAt(),
 
-                booking.getCreatedAt()
+                booking.getCreatedAt(),
+                booking.getBookingType()
         );
     }
 

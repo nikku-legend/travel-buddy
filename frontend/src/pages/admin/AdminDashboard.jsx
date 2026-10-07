@@ -1,58 +1,52 @@
-import { useEffect, useState } from "react";
-import {
-  AlertTriangle,
-  Building2,
-  CalendarDays,
-  CheckCircle,
-  Clock,
-  Compass,
-  CreditCard,
-  FileCheck,
-  MapPin,
-  Shield,
-  ShieldAlert,
-  Users,
-} from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { Shield } from "lucide-react";
 import { useAuth } from "../../context/useAuth";
-import partnerService from "../../services/partnerService";
+import adminService from "../../services/adminService";
 import PartnerReviewQueue from "../../components/admin/PartnerReviewQueue";
+import OverviewTab from "../../components/admin/OverviewTab";
+import UsersTab from "../../components/admin/UsersTab";
+import PropertiesQueue from "../../components/admin/PropertiesQueue";
+import DestinationsTab from "../../components/admin/DestinationsTab";
+import FinanceTab from "../../components/admin/FinanceTab";
+import AuditTab from "../../components/admin/AuditTab";
 
 export default function AdminDashboard() {
   const { user } = useAuth();
   const [activeTab, setActiveTab] = useState("overview");
 
   /*
-   * Live counters for the summary tiles. Previously these were
-   * hard-coded placeholders, which made the console look finished
-   * while showing nothing real.
+   * Overview statistics are fetched once and owned here, so the
+   * tiles and the queues can never disagree. Every other tab
+   * loads its own data when it mounts.
    */
-  const [pendingApprovals, setPendingApprovals] = useState(null);
+  const [stats, setStats] = useState(null);
+  const [statsLoading, setStatsLoading] = useState(false);
+  const [statsError, setStatsError] = useState("");
+
+  const loadStats = useCallback(async () => {
+    setStatsLoading(true);
+    setStatsError("");
+    try {
+      setStats(await adminService.getStats());
+    } catch (err) {
+      setStatsError(
+        err?.response?.data?.message || "Could not load statistics."
+      );
+    } finally {
+      setStatsLoading(false);
+    }
+  }, []);
 
   useEffect(() => {
-    let active = true;
-
-    async function loadPending() {
-      try {
-        const queue = await partnerService.getReviewQueue();
-
-        if (active) setPendingApprovals(queue.length);
-      } catch (err) {
-        /*
-         * Leave the tile as a dash rather than showing a misleading 0,
-         * which would look like "nothing to review" on a failure.
-         */
-        if (active) setPendingApprovals(null);
-      }
+    if (
+      activeTab === "overview" &&
+      !stats &&
+      !statsError &&
+      !statsLoading
+    ) {
+      loadStats();
     }
-
-    if (activeTab === "overview" || activeTab === "kyc") {
-      loadPending();
-    }
-
-    return () => {
-      active = false;
-    };
-  }, [activeTab]);
+  }, [activeTab, stats, statsError, statsLoading, loadStats]);
 
   return (
     <div className="min-h-screen bg-slate-900 text-white">
@@ -102,84 +96,31 @@ export default function AdminDashboard() {
       </div>
 
       <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-        <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-4">
-          <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-5 backdrop-blur-xl">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-                Total Users
-              </span>
-              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-blue-500/10 text-blue-400 border border-blue-500/20">
-                <Users className="h-5 w-5" />
-              </div>
-            </div>
-            <div className="mt-3 text-2xl font-bold text-white">Active</div>
-            <div className="mt-1 text-xs text-slate-500">Travelers & Partners</div>
-          </div>
-
-          <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-5 backdrop-blur-xl">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-                Pending Approvals
-              </span>
-              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-amber-500/10 text-amber-400 border border-amber-500/20">
-                <FileCheck className="h-5 w-5" />
-              </div>
-            </div>
-            <div className="mt-3 text-2xl font-bold text-white">
-              {pendingApprovals === null
-                ? "-"
-                : pendingApprovals}
-            </div>
-            <div className="mt-1 text-xs text-slate-500">Partner KYC submissions</div>
-          </div>
-
-          <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-5 backdrop-blur-xl">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-                Platform Volume
-              </span>
-              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                <CreditCard className="h-5 w-5" />
-              </div>
-            </div>
-            <div className="mt-3 text-2xl font-bold text-white">₹0.00</div>
-            <div className="mt-1 text-xs text-slate-500">Gross platform GMV</div>
-          </div>
-
-          <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-5 backdrop-blur-xl">
-            <div className="flex items-center justify-between">
-              <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-                Security & Risk
-              </span>
-              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-rose-500/10 text-rose-400 border border-rose-500/20">
-                <ShieldAlert className="h-5 w-5" />
-              </div>
-            </div>
-            <div className="mt-3 text-2xl font-bold text-emerald-400">Normal</div>
-            <div className="mt-1 text-xs text-slate-500">Zero active alerts</div>
-          </div>
-        </div>
-
         {/* ========================================================
             TAB CONTENT
             ======================================================== */}
-        {activeTab === "kyc" && (
-          <PartnerReviewQueue />
-        )}
+        <div className="mt-8">
+          {activeTab === "overview" && (
+            <OverviewTab
+              stats={stats}
+              loading={statsLoading}
+              error={statsError}
+              onRetry={loadStats}
+            />
+          )}
 
-        {activeTab !== "kyc" && (
-          <div className="mt-8 rounded-2xl border border-slate-800 bg-slate-950/60 p-8 backdrop-blur-xl text-center">
-            <Shield className="mx-auto h-12 w-12 text-purple-400" />
-            <h3 className="mt-4 text-base font-semibold text-white">
-              Operations & Administration Console
-            </h3>
-            <p className="mt-1 text-sm text-slate-400 max-w-md mx-auto">
-              Super Admin access active for {user?.email}. All
-              administrative operations are monitored and recorded to
-              the audit log.
-            </p>
-          </div>
-        )}
+          {activeTab === "users" && <UsersTab />}
+          {activeTab === "kyc" && <PartnerReviewQueue />}
+          {activeTab === "properties" && <PropertiesQueue />}
+          {activeTab === "destinations" && <DestinationsTab />}
+          {activeTab === "finance" && <FinanceTab />}
+          {activeTab === "audit" && <AuditTab />}
+        </div>
+
+        <p className="mt-8 text-center text-xs text-slate-600">
+          Super Admin session: {user?.email}. All administrative
+          operations are recorded to the audit log.
+        </p>
       </div>
     </div>
   );

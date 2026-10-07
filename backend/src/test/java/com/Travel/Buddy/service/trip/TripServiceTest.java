@@ -39,6 +39,8 @@ class TripServiceTest {
     @Autowired
     private TripService tripService;
     @Autowired
+    private TripHealthService tripHealthService;
+    @Autowired
     private TripCartService cartService;
     @Autowired
     private TripCheckoutService checkoutService;
@@ -70,6 +72,10 @@ class TripServiceTest {
     private StateRepository stateRepository;
     @Autowired
     private CountryRepository countryRepository;
+    @Autowired
+    private com.Travel.Buddy.service.booking.BookingService bookingService;
+    @Autowired
+    private TripSelectionRepository selectionRepository;
 
     private User traveller;
     private User stranger;
@@ -490,6 +496,94 @@ class TripServiceTest {
                 suggestion.totalDistanceKm() > 0,
                 "the engine must actually measure the route"
         );
+    }
+
+    @Test
+    @DisplayName("trip health reports budget and unavailable selection blockers")
+    void tripHealthReportsBudgetAndUnavailableSelections() {
+        LocalDate start = LocalDate.now().plusDays(30);
+        Long tripId = tripService.create(
+                traveller.getUserId(),
+                new CreateTripRequest(
+                        "Health check",
+                        start,
+                        start.plusDays(3),
+                        1,
+                        new BigDecimal("100.00"),
+                        "INR"
+                )
+        ).tripId();
+        withHotel(tripId, 2);
+        TripSelection selection = selectionRepository
+                .findByTrip_TripIdOrderBySelectionIdAsc(tripId)
+                .get(0);
+        var overBudgetHealth = tripHealthService.inspect(
+                traveller.getUserId(), tripId
+        );
+        assertTrue(overBudgetHealth.issues().stream().anyMatch(issue ->
+                issue.code().equals("OVER_BUDGET")
+                        && issue.severity().equals("WARNING")
+        ));
+
+        selection.markUnavailable("The selected room sold out.");
+        selectionRepository.save(selection);
+
+        var health = tripHealthService.inspect(
+                traveller.getUserId(), tripId
+        );
+
+        assertTrue(health.advisoryOnly());
+        assertEquals("NEEDS_ATTENTION", health.status());
+        assertTrue(health.issues().stream().anyMatch(issue ->
+                issue.code().equals("SELECTION_UNAVAILABLE")
+                        && issue.severity().equals("BLOCKER")
+                        && issue.selectionId().equals(
+                                selection.getSelectionId()
+                        )
+        ));
+    }
+
+    @Test
+    @DisplayName("trip health identifies overlapping city dates")
+    void tripHealthIdentifiesCityDateConflicts() {
+        LocalDate start = LocalDate.now().plusDays(30);
+        Long tripId = tripService.create(
+                traveller.getUserId(),
+                new CreateTripRequest(
+                        "Date conflict",
+                        start,
+                        start.plusDays(6),
+                        2,
+                        null,
+                        "INR"
+                )
+        ).tripId();
+        tripService.setRoute(
+                traveller.getUserId(),
+                tripId,
+                new SetTripRouteRequest(List.of(
+                        new SetTripRouteRequest.CityStopRequest(
+                                puri.getCityId(),
+                                start,
+                                start.plusDays(4)
+                        ),
+                        new SetTripRouteRequest.CityStopRequest(
+                                bhubaneswar.getCityId(),
+                                start.plusDays(3),
+                                start.plusDays(6)
+                        )
+                ))
+        );
+
+        var health = tripHealthService.inspect(
+                traveller.getUserId(), tripId
+        );
+
+        assertTrue(health.issues().stream().anyMatch(issue ->
+                issue.code().equals("CITY_DATE_CONFLICT")
+                        && issue.severity().equals("BLOCKER")
+        ));
+        assertEquals("NEEDS_ATTENTION", health.status());
     }
 
     @Test
@@ -1276,10 +1370,196 @@ class TripServiceTest {
         );
     }
 
+    /* ============================================================
+     * TP-10  ACTIVITIES ARE BOOKED TOO
+     *
+     * The cart could collect an activity selection, but the
+     * booking step refused it outright ("is an activity, which
+     * cannot be reserved yet") after the traveller had already
+     * paid -- so a paid trip carried a line that never became a
+     * booking, the checkout stayed in recovery for ever, and the
+     * bookings page had no type to show.
+     * ============================================================ */
+
+    @Test
+    @DisplayName("an activity in the cart is priced per person, not zero")
+    void activityIsPricedPerPerson() {
+        Long tripId = trip(6, 1);
+        Long stop = withStop(tripId);
+        var place = activity(new BigDecimal("250.00"));
+
+        TripDetailResponse after = cartService.addSelection(
+                traveller.getUserId(), tripId,
+                new AddTripSelectionRequest(
+                        TripSelectionType.ACTIVITY, stop,
+                        place.getPlaceId(), null,
+                        LocalDate.now().plusDays(30),
+                        LocalDate.now().plusDays(32),
+                        2, null, null, "INR"
+                )
+        );
+
+        TripSelectionResponse added = after.selections().get(0);
+
+        assertEquals(
+                new BigDecimal("500.00"),
+                added.quotedAmount(),
+                "entry is per person: two tickets at 250 must "
+                        + "not quote as free"
+        );
+
+        assertEquals(
+                "Lingaraj Temple",
+                added.placeName(),
+                "the cart must resolve the attraction so the "
+                        + "traveller sees what they are adding"
+        );
+    }
+
+    @Test
+    @DisplayName("paying a trip books its activity")
+    void payingBooksTheActivity() {
+        Long tripId = trip(6, 1);
+        withActivity(tripId);
+
+        payFully(tripId);
+
+        TripSelectionResponse booked = tripService
+                .get(traveller.getUserId(), tripId)
+                .selections().get(0);
+
+        assertEquals(TripSelectionStatus.BOOKED, booked.status());
+        assertNotNull(booked.bookingId());
+
+        assertEquals(
+                BookingType.ACTIVITY,
+                bookingRepository.findById(booked.bookingId())
+                        .orElseThrow().getBookingType(),
+                "settlement prices commission per type (FR-34), "
+                        + "and the bookings page labels from it"
+        );
+
+        assertEquals(
+                "Lingaraj Temple",
+                booked.targetName(),
+                "a booked activity must still say what it is for"
+        );
+
+        assertTrue(
+                bookingService
+                        .getUserBookings(traveller.getUserId())
+                        .stream()
+                        .anyMatch(r -> r.bookingType()
+                                == BookingType.ACTIVITY),
+                "the bookings page must list the activity. This "
+                        + "trip's only booking has no room "
+                        + "reservation, which used to throw "
+                        + "\"Hotel reservation not found\" and "
+                        + "blank the whole list"
+        );
+    }
+
+    @Test
+    @DisplayName("a retired place cannot be added to the cart")
+    void cartRefusesRetiredPlace() {
+        Long tripId = trip(6, 1);
+        Long stop = withStop(tripId);
+        var place = activity(new BigDecimal("150.00"));
+        place.setActive(false);
+        placeRepository.save(place);
+
+        assertThrows(
+                PartnerApplicationException.class,
+                () -> cartService.addSelection(
+                        traveller.getUserId(), tripId,
+                        new AddTripSelectionRequest(
+                                TripSelectionType.ACTIVITY, stop,
+                                place.getPlaceId(), null,
+                                LocalDate.now().plusDays(30),
+                                LocalDate.now().plusDays(32),
+                                2, null, null, "INR"
+                        )
+                ),
+                "a closed attraction must be refused in the "
+                        + "cart, where the traveller can still "
+                        + "see which line is wrong"
+        );
+    }
+
+    @Test
+    @DisplayName("a place that closes after payment fails the checkout instead of pretending")
+    void retiredPlaceFailsCheckout() {
+        Long tripId = trip(6, 1);
+        var place = withActivity(tripId);
+
+        place.setActive(false);
+        placeRepository.save(place);
+
+        TripCheckoutPreviewResponse preview =
+                checkoutService.preview(
+                        traveller.getUserId(), tripId
+                );
+        checkoutService.assertAgreed(
+                traveller.getUserId(), tripId,
+                new ConfirmTripCheckoutRequest(
+                        preview.checkoutId(),
+                        preview.revalidatedTotal(), "INR"
+                )
+        );
+
+        TripCheckout paid = checkoutService.payMock(
+                traveller.getUserId(), tripId,
+                preview.checkoutId(), true
+        );
+
+        assertEquals(
+                TripCheckoutStatus.RECOVERY_REQUIRED,
+                paid.getStatus(),
+                "a paid trip whose activity can no longer happen "
+                        + "must ask to be fixed, not confirm"
+        );
+    }
+
     private Long withStop(Long tripId) {
         return tripService.setRoute(
                 traveller.getUserId(), tripId, route(puri)
         ).cities().get(0).tripCityId();
+    }
+
+    private com.Travel.Buddy.entity.TouristPlace activity(
+            BigDecimal entryFee
+    ) {
+        com.Travel.Buddy.entity.TouristPlace place =
+                new com.Travel.Buddy.entity.TouristPlace();
+        place.setState(puri.getState());
+        place.setCity(puri);
+        place.setName("Lingaraj Temple");
+        place.setCategory("Temple");
+        place.setEntryFee(entryFee);
+        place.setCurrency("INR");
+        place.setActive(true);
+        return placeRepository.save(place);
+    }
+
+    private com.Travel.Buddy.entity.TouristPlace withActivity(
+            Long tripId
+    ) {
+        Long stop = withStop(tripId);
+        com.Travel.Buddy.entity.TouristPlace place =
+                activity(new BigDecimal("250.00"));
+
+        cartService.addSelection(
+                traveller.getUserId(), tripId,
+                new AddTripSelectionRequest(
+                        TripSelectionType.ACTIVITY, stop,
+                        place.getPlaceId(), null,
+                        LocalDate.now().plusDays(30),
+                        LocalDate.now().plusDays(32),
+                        2, null, null, "INR"
+                )
+        );
+
+        return place;
     }
 
     private void withGuide(Long tripId) {
@@ -1529,6 +1809,25 @@ class TripServiceTest {
                         + "something did"
         );
 
+        long bookingsAfterPayment = bookingRepository.count();
+        checkoutService.markPaid(
+                preview.checkoutId(),
+                afterPay.getRazorpayPaymentId()
+        );
+        assertEquals(
+                TripCheckoutStatus.RECOVERY_REQUIRED,
+                checkoutService.history(
+                        traveller.getUserId(), tripId
+                ).get(0).getStatus(),
+                "a replayed payment notification must not retry "
+                        + "booking confirmation"
+        );
+        assertEquals(
+                bookingsAfterPayment,
+                bookingRepository.count(),
+                "recovery must not create duplicate bookings"
+        );
+
         assertEquals(
                 TripStatus.PLANNING,
                 tripService.get(
@@ -1536,6 +1835,24 @@ class TripServiceTest {
                 ).status(),
                 "a trip whose room was never held must not be "
                         + "presented as confirmed"
+        );
+
+        stockInventory(LocalDate.now().plusDays(30), 2, 5);
+        TripCheckout reconciled = checkoutService.reconcileRecovery(
+                traveller.getUserId(),
+                preview.checkoutId()
+        );
+        assertEquals(
+                TripCheckoutStatus.CONFIRMED,
+                reconciled.getStatus(),
+                "admin reconciliation retries the failed reservation "
+                        + "without requesting a second payment"
+        );
+        assertEquals(
+                TripStatus.CONFIRMED,
+                tripService.get(
+                        traveller.getUserId(), tripId
+                ).status()
         );
     }
 
@@ -1591,6 +1908,49 @@ class TripServiceTest {
                 TripCheckoutStatus.CONFIRMED, paid.getStatus(),
                 "paying reserves the rooms as well as recording "
                         + "the money"
+        );
+    }
+
+    @Test
+    @DisplayName("a late decline cannot overwrite a paid checkout")
+    void lateDeclineCannotOverwritePaidCheckout() {
+        Long tripId = tripWithABookedStay();
+        TripCheckoutPreviewResponse preview =
+                checkoutService.preview(
+                        traveller.getUserId(), tripId
+                );
+        checkoutService.assertAgreed(
+                traveller.getUserId(), tripId,
+                new ConfirmTripCheckoutRequest(
+                        preview.checkoutId(),
+                        preview.revalidatedTotal(),
+                        preview.bill().currency()
+                )
+        );
+        TripCheckout paid = checkoutService.payMock(
+                traveller.getUserId(), tripId,
+                preview.checkoutId(), true
+        );
+
+        assertEquals(TripCheckoutStatus.CONFIRMED, paid.getStatus());
+        assertThrows(
+                PartnerApplicationException.class,
+                () -> checkoutService.payMock(
+                        traveller.getUserId(), tripId,
+                        preview.checkoutId(), false
+                )
+        );
+        assertEquals(
+                TripCheckoutStatus.CONFIRMED,
+                checkoutService.history(
+                        traveller.getUserId(), tripId
+                ).get(0).getStatus()
+        );
+        assertEquals(
+                TripStatus.CONFIRMED,
+                tripService.get(
+                        traveller.getUserId(), tripId
+                ).status()
         );
     }
 

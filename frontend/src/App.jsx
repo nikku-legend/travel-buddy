@@ -92,6 +92,11 @@ export default function App() {
         />
 
         <Route
+          path="/trip-planner"
+          element={<TripPlanner />}
+        />
+
+        <Route
           path="/trips/:tripId"
           element={<TripDetail />}
         />

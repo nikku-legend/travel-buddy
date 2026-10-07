@@ -9,6 +9,7 @@ import com.Travel.Buddy.entity.Cab;
 import com.Travel.Buddy.entity.Guide;
 import com.Travel.Buddy.entity.Property;
 import com.Travel.Buddy.entity.RoomType;
+import com.Travel.Buddy.entity.TouristPlace;
 import com.Travel.Buddy.entity.Trip;
 import com.Travel.Buddy.entity.TripCity;
 import com.Travel.Buddy.entity.TripSelection;
@@ -19,6 +20,7 @@ import com.Travel.Buddy.repository.CabRepository;
 import com.Travel.Buddy.repository.GuideRepository;
 import com.Travel.Buddy.repository.PropertyRepository;
 import com.Travel.Buddy.repository.RoomTypeRepository;
+import com.Travel.Buddy.repository.TouristPlaceRepository;
 import com.Travel.Buddy.repository.TripCityRepository;
 import com.Travel.Buddy.repository.TripSelectionRepository;
 
@@ -51,6 +53,7 @@ public class TripCartService {
     private final RoomTypeRepository roomTypeRepository;
     private final GuideRepository guideRepository;
     private final CabRepository cabRepository;
+    private final TouristPlaceRepository touristPlaceRepository;
     private final TripService tripService;
     private final TripBillService billService;
     private final TripMilestoneService milestoneService;
@@ -62,6 +65,7 @@ public class TripCartService {
             RoomTypeRepository roomTypeRepository,
             GuideRepository guideRepository,
             CabRepository cabRepository,
+            TouristPlaceRepository touristPlaceRepository,
             TripService tripService,
             TripBillService billService,
             TripMilestoneService milestoneService
@@ -72,6 +76,7 @@ public class TripCartService {
         this.roomTypeRepository = roomTypeRepository;
         this.guideRepository = guideRepository;
         this.cabRepository = cabRepository;
+        this.touristPlaceRepository = touristPlaceRepository;
         this.tripService = tripService;
         this.billService = billService;
         this.milestoneService = milestoneService;
@@ -140,6 +145,16 @@ public class TripCartService {
         RoomType roomType = attachRoomType(
                 selection, request
         );
+
+        /*
+         * An activity's target IS the place, so it is resolved
+         * here rather than at booking: a dead attraction should
+         * fail where the traveller can still see the mistake.
+         */
+        if (request.selectionType()
+                == TripSelectionType.ACTIVITY) {
+            attachPlace(selection, request);
+        }
 
         BigDecimal quote = request.quotedAmount();
 
@@ -268,6 +283,43 @@ public class TripCartService {
     }
 
     /**
+     * Links the attraction behind an activity selection.
+     *
+     * <p>Unlike a room type there is nothing to cross-check
+     * the id against: for an activity the target id *is* the
+     * place. It is loaded here, in the cart, so a missing or
+     * retired attraction fails where the traveller can still
+     * see which line is wrong -- not at checkout, where one
+     * dead line would hold up the whole payment.
+     */
+    private void attachPlace(
+            TripSelection selection,
+            AddTripSelectionRequest request
+    ) {
+        if (request.targetId() == null) {
+            throw PartnerApplicationException.badRequest(
+                    "An activity needs a place to visit"
+            );
+        }
+
+        TouristPlace place = touristPlaceRepository
+                .findById(request.targetId())
+                .orElseThrow(() ->
+                        PartnerApplicationException.notFound(
+                                "Place not found"
+                        )
+                );
+
+        if (!Boolean.TRUE.equals(place.getActive())) {
+            throw PartnerApplicationException.badRequest(
+                    "This place is no longer open to visitors"
+            );
+        }
+
+        selection.setPlace(place);
+    }
+
+    /**
      * A planning-time estimate. Deliberately simple: nights
      * times base rate times rooms, so the number is predictable
      * to the traveller. Anything more elaborate would have to be
@@ -365,6 +417,36 @@ public class TripCartService {
             }
 
             return cab.getBaseFare()
+                    .setScale(2, java.math.RoundingMode.HALF_UP);
+        }
+
+        if (type == TripSelectionType.ACTIVITY) {
+            TouristPlace place = touristPlaceRepository
+                    .findById(request.targetId())
+                    .orElse(null);
+
+            if (place == null
+                    || place.getEntryFee() == null) {
+                /*
+                 * Free entry, or an attraction that has since
+                 * vanished. Never quote a figure that cannot
+                 * be justified at checkout.
+                 */
+                return BigDecimal.ZERO;
+            }
+
+            /*
+             * Entry is per person, so the party is what is
+             * billed. Somebody walks through the gate, so a
+             * party of nothing still pays for one.
+             */
+            int people = request.guests() != null
+                    && request.guests() > 0
+                    ? request.guests()
+                    : 1;
+
+            return place.getEntryFee()
+                    .multiply(BigDecimal.valueOf(people))
                     .setScale(2, java.math.RoundingMode.HALF_UP);
         }
 

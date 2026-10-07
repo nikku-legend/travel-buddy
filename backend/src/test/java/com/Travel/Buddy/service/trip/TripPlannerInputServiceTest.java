@@ -395,6 +395,76 @@ class TripPlannerInputServiceTest {
         );
     }
 
+    @Test
+    @DisplayName("city suggestions stay inside the selected country and region")
+    void suggestionsRespectCountryAndRegion() {
+        Country country = new Country();
+        country.setName("Planner Country");
+        country.setIsoCode(UUID.randomUUID().toString()
+                .substring(0, 5).toUpperCase());
+        country = countryRepository.save(country);
+        Country otherCountry = new Country();
+        otherCountry.setName("Other Planner Country");
+        otherCountry.setIsoCode(UUID.randomUUID().toString()
+                .substring(0, 5).toUpperCase());
+        otherCountry = countryRepository.save(otherCountry);
+        String suffix = UUID.randomUUID().toString();
+        String regionName = "Planner Region " + suffix;
+
+        State selectedState = new State();
+        selectedState.setName(regionName);
+        selectedState.setCountry(country);
+        selectedState.setRegionZone(RegionZone.EAST);
+        selectedState = stateRepository.save(selectedState);
+
+        State otherState = new State();
+        otherState.setName(regionName);
+        otherState.setCountry(otherCountry);
+        otherState.setRegionZone(RegionZone.EAST);
+        otherState = stateRepository.save(otherState);
+
+        City selectedCity = cityRepository.save(new City(
+                selectedState,
+                "Planner City " + suffix,
+                "planner-city-" + suffix
+        ));
+        cityRepository.save(new City(
+                otherState,
+                "Other City " + suffix,
+                "other-city-" + suffix
+        ));
+
+        Long tripId = trip(5);
+        inputService.setScope(
+                traveller.getUserId(),
+                tripId,
+                new SetTripScopeRequest(
+                        "EAST",
+                        selectedState.getName(),
+                        country.getCountryId()
+                )
+        );
+        assertEquals(country.getCountryId(),
+                tripService.get(traveller.getUserId(), tripId)
+                        .countryId());
+
+        List<CitySuggestionResponse> suggestions =
+                inputService.suggestCities(
+                        traveller.getUserId(), tripId
+                );
+
+        assertTrue(suggestions.stream().anyMatch(
+                city -> city.cityId().equals(
+                        selectedCity.getCityId()
+                )
+        ));
+        assertTrue(suggestions.stream().noneMatch(
+                city -> city.name().equals(
+                        "Other City " + suffix
+                )
+        ));
+    }
+
     /* ============================================================
      * OWNERSHIP
      * ============================================================ */

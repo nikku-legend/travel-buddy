@@ -7,6 +7,7 @@ import com.Travel.Buddy.dto.review.ReviewSummaryResponse;
 import com.Travel.Buddy.entity.*;
 import com.Travel.Buddy.exception.PartnerApplicationException;
 import com.Travel.Buddy.repository.*;
+import com.Travel.Buddy.service.admin.AdminAuditService;
 import com.Travel.Buddy.service.notification.NotificationEvents;
 
 import org.springframework.stereotype.Service;
@@ -53,6 +54,8 @@ public class ReviewService {
 
     private final NotificationEvents notificationEvents;
 
+    private final AdminAuditService auditService;
+
     public ReviewService(
             ReviewRepository reviewRepository,
             ReviewSummaryRepository summaryRepository,
@@ -63,7 +66,8 @@ public class ReviewService {
             TouristPlaceRepository touristPlaceRepository,
             UserRepository userRepository,
             CabRideRepository cabRideRepository,
-            NotificationEvents notificationEvents
+            NotificationEvents notificationEvents,
+            AdminAuditService auditService
     ) {
         this.reviewRepository = reviewRepository;
         this.summaryRepository = summaryRepository;
@@ -75,6 +79,7 @@ public class ReviewService {
         this.userRepository = userRepository;
         this.cabRideRepository = cabRideRepository;
         this.notificationEvents = notificationEvents;
+        this.auditService = auditService;
     }
 
     /* ============================================================
@@ -352,6 +357,25 @@ public class ReviewService {
     }
 
     /**
+     * Reviews escalated by traveller reports, separate from the
+     * initial-submission queue so reported published content is not
+     * lost after crossing the flag threshold.
+     */
+    @Transactional(readOnly = true)
+    public List<ReviewResponse> flaggedQueue() {
+        return reviewRepository
+                .findByStatusOrderByCreatedAtAsc(
+                        ReviewStatus.FLAGGED,
+                        org.springframework.data.domain
+                                .PageRequest.of(0, 200)
+                )
+                .getContent()
+                .stream()
+                .map(review -> toResponse(review, null))
+                .toList();
+    }
+
+    /**
      * Publishes or rejects a review, then rebuilds the subject's
      * rating either way so the aggregate never drifts.
      */
@@ -409,6 +433,20 @@ public class ReviewService {
                 targetNameOf(saved),
                 Boolean.TRUE.equals(request.approved()),
                 reason
+        );
+
+        auditService.record(
+                adminId,
+                Boolean.TRUE.equals(request.approved())
+                        ? "REVIEW_PUBLISHED"
+                        : "REVIEW_REJECTED",
+                "Review",
+                saved.getReviewId(),
+                "Target " + saved.getTargetType() + ":"
+                        + saved.getTargetId()
+                        + "; flagged count: "
+                        + saved.getFlaggedCount()
+                        + (reason == null ? "" : "; reason: " + reason)
         );
 
         return toResponse(saved, null);

@@ -7,6 +7,7 @@ import {
   Clock3,
   CreditCard,
   Hotel,
+  Car,
   Search,
   SlidersHorizontal,
   XCircle,
@@ -19,10 +20,54 @@ import {
   RefreshCcw,
   AlertTriangle,
   Loader2,
+  User,
 } from "lucide-react";
 
 import bookingService from "../services/bookingService";
 import { useAuth } from "../context/useAuth";
+
+function bookingKindLabel(booking) {
+  switch (booking.bookingType) {
+    case "ACTIVITY":
+      return "Activity";
+    case "GUIDE":
+      return "Guide";
+    case "CAB":
+      return "Ride";
+    default:
+      return "Stay";
+  }
+}
+
+function bookingNameLabel(booking) {
+  if (booking.propertyName) {
+    return booking.propertyName;
+  }
+
+  switch (booking.bookingType) {
+    case "ACTIVITY":
+      return "Activity booking";
+    case "GUIDE":
+      return "Guide booking";
+    case "CAB":
+      return "Ride booking";
+    default:
+      return "Hotel reservation";
+  }
+}
+
+function BookingTypeIcon({ booking, size = 21 }) {
+  const Icon =
+    booking.bookingType === "ACTIVITY"
+      ? MapPin
+      : booking.bookingType === "GUIDE"
+        ? User
+        : booking.bookingType === "CAB"
+          ? Car
+          : Hotel;
+
+  return <Icon size={size} />;
+}
 
 /* =========================================================
    FORMATTERS
@@ -418,12 +463,11 @@ function CancellationModal({
 
               <div>
                 <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-                  Stay
+                  {bookingKindLabel(booking)}
                 </p>
 
                 <p className="mt-1 text-sm font-bold text-slate-900">
-                  {booking.propertyName ||
-                    "Hotel reservation"}
+                  {bookingNameLabel(booking)}
                 </p>
               </div>
 
@@ -886,7 +930,7 @@ function BookingCard({
           <div className="flex min-w-0 items-start gap-4">
 
             <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-slate-950 text-white shadow-sm">
-              <Hotel size={21} />
+              <BookingTypeIcon booking={booking} size={21} />
             </div>
 
             <div className="min-w-0">
@@ -906,8 +950,7 @@ function BookingCard({
               </div>
 
               <h2 className="mt-1 truncate text-lg font-bold text-slate-950 sm:text-xl">
-                {booking.propertyName ||
-                  "Hotel reservation"}
+                {bookingNameLabel(booking)}
               </h2>
 
               {booking.roomTypeName && (
@@ -1211,7 +1254,7 @@ function EmptyState({ filtered }) {
       <p className="mx-auto mt-2 max-w-md text-sm leading-6 text-slate-500">
         {filtered
           ? "Try changing your search or status filter to find another booking."
-          : "Your hotel reservations will appear here once you make your first booking."}
+          : "Your bookings will appear here once you make your first booking."}
       </p>
 
       {!filtered && (

@@ -16,15 +16,20 @@ import com.Travel.Buddy.dto.trip.TripBillResponse;
 import com.Travel.Buddy.dto.trip.TripCheckoutPreviewResponse;
 import com.Travel.Buddy.dto.trip.TripCheckoutResponse;
 import com.Travel.Buddy.dto.trip.TripDetailResponse;
+import com.Travel.Buddy.dto.trip.TripHealthResponse;
+import com.Travel.Buddy.dto.trip.TripPaymentOrderResponse;
+import com.Travel.Buddy.dto.trip.VerifyTripPaymentRequest;
 import com.Travel.Buddy.dto.trip.TripReviewCardResponse.TripReviewCentreResponse;
 import com.Travel.Buddy.entity.Trip;
 import com.Travel.Buddy.entity.User;
+import com.Travel.Buddy.exception.PartnerApplicationException;
 import com.Travel.Buddy.repository.UserRepository;
 import com.Travel.Buddy.service.trip.TripBillService;
 import com.Travel.Buddy.service.trip.TripCartService;
 import com.Travel.Buddy.service.trip.TripPlannerInputService;
 import com.Travel.Buddy.service.trip.TripRecommendationService;
 import com.Travel.Buddy.service.trip.TripCheckoutService;
+import com.Travel.Buddy.service.trip.TripHealthService;
 import com.Travel.Buddy.service.trip.TripReviewService;
 import com.Travel.Buddy.service.trip.TripService;
 import com.Travel.Buddy.service.trip.TripService.RouteSuggestionResponse;
@@ -46,6 +51,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.beans.factory.annotation.Value;
 
 import java.util.List;
 import java.util.Map;
@@ -70,8 +76,10 @@ public class TripPlannerController {
     private final TripRecommendationService recommendationService;
     private final TripBillService billService;
     private final TripCheckoutService checkoutService;
+    private final TripHealthService healthService;
     private final TripReviewService reviewService;
     private final UserRepository userRepository;
+    private final boolean mockPaymentsEnabled;
 
     public TripPlannerController(
             TripService tripService,
@@ -80,8 +88,11 @@ public class TripPlannerController {
             TripRecommendationService recommendationService,
             TripBillService billService,
             TripCheckoutService checkoutService,
+            TripHealthService healthService,
             TripReviewService reviewService,
-            UserRepository userRepository
+            UserRepository userRepository,
+            @Value("${app.payment.mock-enabled:false}")
+            boolean mockPaymentsEnabled
     ) {
         this.tripService = tripService;
         this.cartService = cartService;
@@ -89,8 +100,10 @@ public class TripPlannerController {
         this.recommendationService = recommendationService;
         this.billService = billService;
         this.checkoutService = checkoutService;
+        this.healthService = healthService;
         this.reviewService = reviewService;
         this.userRepository = userRepository;
+        this.mockPaymentsEnabled = mockPaymentsEnabled;
     }
 
     /* ============================================================
@@ -168,6 +181,18 @@ public class TripPlannerController {
     ) {
         return ResponseEntity.ok(
                 tripService.warn(
+                        currentUserId(authentication), tripId
+                )
+        );
+    }
+
+    @GetMapping("/trip-planner/trips/{tripId}/health")
+    public ResponseEntity<TripHealthResponse> health(
+            Authentication authentication,
+            @PathVariable Long tripId
+    ) {
+        return ResponseEntity.ok(
+                healthService.inspect(
                         currentUserId(authentication), tripId
                 )
         );
@@ -325,6 +350,11 @@ public class TripPlannerController {
             @PathVariable Long tripId,
             @Valid @RequestBody PayTripCheckoutRequest request
     ) {
+        if (!mockPaymentsEnabled) {
+            throw PartnerApplicationException.forbidden(
+                    "Mock payments are disabled"
+            );
+        }
         return ResponseEntity.ok(
                 TripCheckoutResponse.of(
                         checkoutService.payMock(
@@ -338,6 +368,43 @@ public class TripPlannerController {
                 )
         );
     }
+
+    @PostMapping(
+            "/trip-planner/trips/{tripId}/checkout/{checkoutId}/payment/order"
+    )
+    public ResponseEntity<TripPaymentOrderResponse> createPaymentOrder(
+            Authentication authentication,
+            @PathVariable Long tripId,
+            @PathVariable Long checkoutId
+    ) {
+        return ResponseEntity.ok(
+                checkoutService.createPaymentOrder(
+                        currentUserId(authentication),
+                        tripId,
+                        checkoutId
+                )
+        );
+    }
+
+    @PostMapping(
+            "/trip-planner/trips/{tripId}/checkout/payment/verify"
+    )
+    public ResponseEntity<TripCheckoutResponse> verifyTripPayment(
+            Authentication authentication,
+            @PathVariable Long tripId,
+            @Valid @RequestBody VerifyTripPaymentRequest request
+    ) {
+        return ResponseEntity.ok(
+                TripCheckoutResponse.of(
+                        checkoutService.verifyPayment(
+                                currentUserId(authentication),
+                                tripId,
+                                request
+                        )
+                )
+        );
+    }
+
     @GetMapping("/trip-planner/trips/{tripId}/checkout")
     public ResponseEntity<List<TripCheckoutResponse>>
             history(

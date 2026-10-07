@@ -1358,12 +1358,17 @@ public class BookingService {
                                     .findByBooking_BookingId(
                                             booking.getBookingId()
                                     )
-                                    .orElseThrow(() ->
-                                            new BookingException(
-                                                    "Hotel reservation not found for booking "
-                                                            + booking.getBookingReference()
-                                            )
-                                    );
+                                    .orElse(null);
+
+                    /*
+                     * Guide, ride and activity bookings have no
+                     * room reservation. Throwing here blanked
+                     * the whole bookings page for a traveller
+                     * whose first booking was a trip extra.
+                     */
+                    if (reservation == null) {
+                        return withoutStay(booking);
+                    }
 
                     return toResponse(
                             booking,
@@ -1425,11 +1430,15 @@ public class BookingService {
                         .findByBooking_BookingId(
                                 bookingId
                         )
-                        .orElseThrow(() ->
-                                new BookingException(
-                                        "Hotel reservation not found"
-                                )
-                        );
+                        .orElse(null);
+
+        /*
+         * Stay-less bookings (guides, rides, activities):
+         * see getUserBookings.
+         */
+        if (reservation == null) {
+            return withoutStay(booking);
+        }
 
 
         return toResponse(
@@ -1661,8 +1670,70 @@ public class BookingService {
                 booking.getPaymentStatus(),
 
                 booking.getHoldExpiresAt(),
+                booking.getCreatedAt(),
+                booking.getBookingType()
+        );
+    }
 
-                booking.getCreatedAt()
+    /*
+     * ============================================================
+     * RESPONSE WITHOUT STAY
+     * ============================================================
+     *
+     * A guide tour, a paid ride and an activity are bookings
+     * too, but none of them has a room reservation. The bookings
+     * page asks for every booking the traveller owns, so mapping
+     * through toResponse() and throwing "Hotel reservation not
+     * found" took the whole page down the moment a trip extra
+     * was the first thing on it.
+     *
+     * Stay-only fields are null here; BookingResponse.bookingType
+     * says what the booking actually is so the client can label
+     * the card.
+     */
+    private BookingResponse withoutStay(
+            Booking booking
+    ) {
+        return new BookingResponse(
+
+                booking.getBookingId(),
+
+                booking.getBookingReference(),
+
+                booking.getUser()
+                        .getUserId(),
+
+                null,
+
+                null,
+
+                null,
+
+                null,
+
+                null,
+
+                null,
+
+                booking.getGuestCount(),
+
+                null,
+
+                null,
+
+                booking.getTotalAmount(),
+
+                booking.getCurrency(),
+
+                booking.getBookingStatus(),
+
+                booking.getPaymentStatus(),
+
+                booking.getHoldExpiresAt(),
+
+                booking.getCreatedAt(),
+
+                booking.getBookingType()
         );
     }
 }

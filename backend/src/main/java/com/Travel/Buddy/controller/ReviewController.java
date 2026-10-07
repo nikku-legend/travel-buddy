@@ -182,6 +182,11 @@ public class ReviewController {
         );
     }
 
+    @GetMapping("/admin/reviews/flagged")
+    public ResponseEntity<List<ReviewResponse>> flaggedQueue() {
+        return ResponseEntity.ok(reviewService.flaggedQueue());
+    }
+
     @PostMapping("/admin/reviews/{reviewId}/decision")
     public ResponseEntity<ReviewResponse> decide(
             Authentication authentication,
